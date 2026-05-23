@@ -1,5 +1,42 @@
 export type SearchContextSize = "low" | "medium" | "high";
 
+export type CodexErrorKind = "auth" | "rate_limit" | "transport" | "timeout" | "schema" | "unknown";
+
+export class CodexError extends Error {
+  readonly kind: CodexErrorKind;
+  readonly status?: number;
+
+  constructor(kind: CodexErrorKind, message: string, status?: number) {
+    super(message);
+    this.name = "CodexError";
+    this.kind = kind;
+    if (status !== undefined) this.status = status;
+  }
+}
+
+export function classifyError(error: unknown): CodexErrorKind {
+  if (error instanceof CodexError) return error.kind;
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    return "timeout";
+  }
+  return "unknown";
+}
+
+function classifyHttpStatus(status: number): CodexErrorKind {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 429) return "rate_limit";
+  return "transport";
+}
+
+function classifyEventErrorMessage(message: string): CodexErrorKind {
+  const lower = message.toLowerCase();
+  if (/rate[- ]?limit|too many requests|quota|429/.test(lower)) return "rate_limit";
+  if (/auth|unauthori[sz]ed|forbidden|401|403/.test(lower)) return "auth";
+  if (/timeout|timed out/.test(lower)) return "timeout";
+  if (/network|connection|disconnect|transport|fetch failed/.test(lower)) return "transport";
+  return "unknown";
+}
+
 export interface CodexModel {
   id: string;
   name?: string;
@@ -157,8 +194,11 @@ export async function fetchCodexModels(options: {
     signal: options.signal,
   });
   if (!response.ok) {
-    throw new Error(
-      `Codex models request failed: HTTP ${response.status} ${await response.text()}`,
+    const status = response.status;
+    throw new CodexError(
+      classifyHttpStatus(status),
+      `Codex models request failed: HTTP ${status} ${await response.text()}`,
+      status,
     );
   }
 
@@ -196,12 +236,15 @@ export async function fetchCodexWebSearch(
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Codex web search request failed: HTTP ${response.status} ${await response.text()}`,
+    const status = response.status;
+    throw new CodexError(
+      classifyHttpStatus(status),
+      `Codex web search request failed: HTTP ${status} ${await response.text()}`,
+      status,
     );
   }
   if (!response.body) {
-    throw new Error("Codex web search response did not include a body");
+    throw new CodexError("transport", "Codex web search response did not include a body");
   }
 
   let responseId: string | undefined;
@@ -247,7 +290,8 @@ export async function fetchCodexWebSearch(
     }
 
     if (event.type === "response.failed") {
-      throw new Error(data.error?.message ?? data.error?.code ?? "Codex web search failed");
+      const message = data.error?.message ?? data.error?.code ?? "Codex web search failed";
+      throw new CodexError(classifyEventErrorMessage(message), message);
     }
   }
 

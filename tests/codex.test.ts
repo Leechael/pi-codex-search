@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  classifyError,
+  CodexError,
   extractAccountIdFromToken,
   fetchCodexModels,
+  fetchCodexWebSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
   selectDefaultModel,
@@ -50,6 +53,81 @@ describe("codex helpers", () => {
     assert.equal(selectDefaultModel([{ id: "gpt-a" }, { id: "gpt-b", isDefault: true }]), "gpt-b");
     assert.equal(selectDefaultModel([{ id: "gpt-a" }]), "gpt-a");
     assert.equal(selectDefaultModel([]), undefined);
+  });
+
+  it("classifies HTTP 401 from /codex/models as an auth CodexError", async () => {
+    const fetchImpl = async () =>
+      new Response("unauthorized", { status: 401, statusText: "Unauthorized" });
+
+    await assert.rejects(
+      fetchCodexModels({
+        token: "t",
+        accountId: "a",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 401);
+        return true;
+      },
+    );
+  });
+
+  it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {
+    const fetchImpl = async () =>
+      new Response("too many", { status: 429, statusText: "Too Many Requests" });
+
+    await assert.rejects(
+      fetchCodexWebSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "rate_limit");
+        assert.equal(error.status, 429);
+        return true;
+      },
+    );
+  });
+
+  it("maps response.failed events to a kind based on the error message", async () => {
+    const sse = 'event: response.failed\ndata: {"error":{"message":"Rate limit exceeded"}}\n\n';
+    const fetchImpl = async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    await assert.rejects(
+      fetchCodexWebSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "rate_limit");
+        return true;
+      },
+    );
+  });
+
+  it("classifies generic errors via classifyError", () => {
+    assert.equal(classifyError(new CodexError("auth", "x")), "auth");
+    const abortErr = new Error("aborted");
+    abortErr.name = "AbortError";
+    assert.equal(classifyError(abortErr), "timeout");
+    assert.equal(classifyError(new Error("boom")), "unknown");
   });
 
   it("passes client_version to the models endpoint", async () => {

@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/pi-codex-search)](https://www.npmjs.com/package/pi-codex-search)
 [![license](https://img.shields.io/npm/l/pi-codex-search)](./LICENSE)
 
-**Give Pi a `web_search` tool through your Codex subscription.**
+**Give Pi a `codex_search` tool through your Codex subscription.**
 
 Pi is the harness. Codex already has a ChatGPT-backed search path. This package connects the two: it adds a normal Pi tool that searches the web through the `openai-codex` account you already use in Pi.
 
@@ -22,7 +22,7 @@ This extension is for the cases where your Pi workflow needs fresh or source-bac
 
 ## What this package adds
 
-- **A `web_search` tool** — query the web from inside Pi.
+- **A `codex_search` tool** — query the web from inside Pi.
 - **Codex auth reuse** — reads the same `openai-codex` credential that Pi stores after `/login openai-codex`.
 - **No manual token handling** — the extension does not read `ACCESS_TOKEN` during normal Pi usage.
 - **Model selection that follows Pi** — use an explicit env override, the active Codex model, or the default model from Codex's model list.
@@ -62,7 +62,7 @@ Inside Pi, run:
 
 Choose `ChatGPT Plus/Pro (Codex Subscription)` if Pi asks which provider to use. Pi stores and refreshes the credential.
 
-At `session_start`, this extension asks Pi for the `openai-codex` token. If no token is available, or if the ChatGPT account id cannot be found from the stored OAuth credential or decoded access token, it does not register `web_search`. In that case the model will not see the tool.
+The extension always registers `codex_search`. If Pi has no `openai-codex` token, or if the ChatGPT account id cannot be recovered from the stored OAuth credential or decoded access token, the tool fails on first call with an `auth`-kind error pointing the user at `/login openai-codex`.
 
 ## Tool
 
@@ -70,54 +70,92 @@ The extension registers one tool:
 
 ```json
 {
-  "name": "web_search",
+  "name": "codex_search",
   "arguments": {
-    "query": "latest OpenAI Codex release notes",
+    "queries": ["latest OpenAI Codex release notes"],
     "search_context_size": "medium",
-    "live": true
+    "freshness": "live"
   }
 }
 ```
 
 Arguments:
 
-- `query` — required search question.
+- `queries` — required array of 1–5 search questions. Each query is dispatched in parallel; results are returned grouped by query.
 - `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
-- `live` — optional boolean; defaults to live web access.
+- `freshness` — optional, `live` or `cached`; `live` enables external web access, `cached` skips it. Defaults to `live`.
 
 The tool returns text plus a `Sources:` section when citations are available. The structured `details` object includes:
 
 - `model`
-- `responseId`
-- `searchCalls`
-- `citations`
-- `usage`
+- `freshness` / `searchContextSize`
+- `queryCount` / `failedQueryCount`
+- `successes`: per-query `{ query, text, citations, searchCalls, responseId?, usage? }`
+- `failures`: per-query `{ query, kind, message }` with `kind` one of `auth`, `rate_limit`, `transport`, `timeout`, `schema`, `unknown`
 
 ## Model used for search
 
 The search request needs a Codex model id. The extension chooses it in this order:
 
-1. `PI_CODEX_WEB_SEARCH_MODEL`, if set.
+1. `model` from env / project / home configuration, if set.
 2. The active Pi model, if it comes from the `openai-codex` provider.
 3. The default model from Codex's `/codex/models` response.
 
 Most users do not need to set anything.
 
-## Common knobs
+## Configuration
 
-Most users only need `/login openai-codex`. These env vars are here for debugging or custom setups:
+Settings are merged from three layers, highest precedence first:
 
-- `PI_CODEX_WEB_SEARCH_MODEL` — force the Codex model used by the tool.
-- `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE` — default search context size: `low`, `medium`, or `high`.
-- `PI_CODEX_WEB_SEARCH_LIVE` — set to `false` to use cached web access.
-- `PI_CODEX_WEB_SEARCH_BASE_URL` — override the Codex backend base URL.
-- `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` — override the `client_version` sent to `/codex/models`.
+1. Environment variables (table below).
+2. Project file: `<cwd>/.pi/pi-codex-search.json`.
+3. Home file: `~/.pi/pi-codex-search.json`.
+
+Each layer is optional. Missing files are skipped silently; malformed JSON or invalid values throw on load.
+
+Full schema (all fields optional):
+
+```json
+{
+  "toolName": "codex_search",
+  "model": "gpt-5-codex",
+  "baseUrl": "https://chatgpt.com/backend-api",
+  "clientVersion": "1.0.0",
+  "searchContextSize": "medium",
+  "freshness": "live"
+}
+```
+
+Environment variable equivalents:
+
+| Field               | Env var                              |
+| ------------------- | ------------------------------------ |
+| `toolName`          | `PI_CODEX_WEB_SEARCH_TOOL_NAME`      |
+| `model`             | `PI_CODEX_WEB_SEARCH_MODEL`          |
+| `baseUrl`           | `PI_CODEX_WEB_SEARCH_BASE_URL`       |
+| `clientVersion`     | `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` |
+| `searchContextSize` | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
+| `freshness`         | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
+
+### Slash command
+
+`/codex-search-settings` opens an interactive settings dialog (in interactive mode). Subcommands:
+
+- `/codex-search-settings` — open the main dialog (project / home config editors, reset menu).
+- `/codex-search-settings status` — print the merged configuration and which layers contributed.
+- `/codex-search-settings reset` — open the reset menu (delete project or home config file).
+
+Each edit writes the matching scope file immediately. On dialog close, the extension calls `ctx.reload()` so the new `toolName` and defaults apply without restarting pi.
+
+### Renaming the tool
+
+The most common reason to use configuration is to avoid colliding with another extension that registers `codex_search` (or whatever default you picked). Set `toolName` in either config file or via env to expose this extension under a different name. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
 
 ## Notes
 
 ### Codex search vs model search
 
-This does not add browsing to the model provider itself. It adds a Pi tool. The model decides when to call `web_search`, just like any other tool.
+This does not add browsing to the model provider itself. It adds a Pi tool. The model decides when to call `codex_search`, just like any other tool.
 
 ### Account id
 
@@ -129,23 +167,27 @@ The extension builds the Codex request headers itself, including `Authorization`
 
 ## Troubleshooting
 
-### The model does not see `web_search`
+### `codex_search` fails with an `auth`-kind error
 
-The tool is only registered when Codex auth is available at session start. Run:
+The tool is always registered, but the first call fails when Pi has no `openai-codex` token or the ChatGPT account id cannot be recovered. Run:
 
 ```text
 /login openai-codex
 ```
 
-Then start a new Pi session. If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`.
+If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`. The extension picks up the refreshed credential on the next call.
 
-### `web_search` says the account id was not found
+### `codex_search` says the account id was not found
 
 The stored OAuth credential did not include an account id, and the extension could not decode one from the access token. Re-run `/login openai-codex` so Pi refreshes the credential.
 
 ### Search uses the wrong model
 
-Set `PI_CODEX_WEB_SEARCH_MODEL` to the Codex model id you want. If unset, the extension uses the active Codex model when possible, then falls back to the default model from `/codex/models`.
+Set `model` in your config file (or `PI_CODEX_WEB_SEARCH_MODEL`) to the Codex model id you want. If unset, the extension uses the active Codex model when possible, then falls back to the default model from `/codex/models`.
+
+### A different extension already registers `codex_search`
+
+Use `/codex-search-settings` to rename this extension's tool (or set `toolName` in `~/.pi/pi-codex-search.json`). Reload pi to apply.
 
 ## Development
 
