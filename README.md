@@ -3,31 +3,34 @@
 [![npm](https://img.shields.io/npm/v/pi-codex-search)](https://www.npmjs.com/package/pi-codex-search)
 [![license](https://img.shields.io/npm/l/pi-codex-search)](./LICENSE)
 
-**Give Pi a `codex_search` tool through your Codex subscription.**
+**Search the web in Pi through your Codex subscription.**
 
-Pi is the harness. Codex already has a ChatGPT-backed search path. This package connects the two: it adds a normal Pi tool that searches the web through the `openai-codex` account you already use in Pi.
+Pi keeps the harness small. Codex already has a ChatGPT-backed search path. This package connects the two: it adds a `codex_search` tool to Pi and uses the same `openai-codex` login Pi already knows about.
 
 No `ACCESS_TOKEN` env var. No separate login flow. If Pi can use your Codex subscription, this extension can use the same auth.
 
 ## Why this exists
 
-Pi keeps the core small on purpose. Search does not have to be baked into the harness; it can be a tool.
+Web search does not have to be built into Pi. It can be a tool.
 
-This extension is for the cases where your Pi workflow needs fresh or source-backed information:
+This extension is for Pi workflows that need fresh or source-backed information:
 
-- **Current docs and release notes.** Ask the model to look up something that changed after its training cutoff.
-- **Source-backed answers.** The tool returns citations alongside the text.
-- **Codex account reuse.** It uses Pi's existing `openai-codex` OAuth credential instead of asking you to paste tokens.
-- **Custom Pi workflows.** Any model in Pi can see the tool once the Codex auth is available at session start.
+- **Look up current docs and release notes.** Ask the model to check things that changed after its training cutoff.
+- **Get sources with the answer.** Search results include citations when Codex returns them.
+- **Reuse your Codex login.** The tool uses Pi's existing `openai-codex` OAuth credential instead of asking you to paste tokens.
+- **Batch related searches.** One tool call can run up to five related queries in parallel and return the results grouped by query.
+- **Keep projects in control.** Rename the tool, change defaults, or disable it per project.
 
 ## What this package adds
 
-- **A `codex_search` tool** — query the web from inside Pi.
-- **Codex auth reuse** — reads the same `openai-codex` credential that Pi stores after `/login openai-codex`.
-- **No manual token handling** — the extension does not read `ACCESS_TOKEN` during normal Pi usage.
-- **Model selection that follows Pi** — use an explicit env override, the active Codex model, or the default model from Codex's model list.
-- **Streaming updates** — partial answer text is sent back while the search response streams.
-- **Structured details** — the final tool result includes citations, search calls, response id, model, and usage.
+- A `codex_search` Pi tool.
+- 1–5 search queries per call, run in parallel.
+- `live` or `cached` freshness, plus `low` / `medium` / `high` search context size.
+- Streaming progress while Codex responds.
+- Collapsed result previews in the TUI, with full text and sources available when expanded.
+- Structured details: model, citations, search calls, response ids, usage, and per-query failures.
+- Config files for home and project defaults.
+- `/codex-search-settings` for status, editing, reset, rename, and disable.
 
 ## Install
 
@@ -62,11 +65,19 @@ Inside Pi, run:
 
 Choose `ChatGPT Plus/Pro (Codex Subscription)` if Pi asks which provider to use. Pi stores and refreshes the credential.
 
-The extension always registers `codex_search`. If Pi has no `openai-codex` token, or if the ChatGPT account id cannot be recovered from the stored OAuth credential or decoded access token, the tool fails on first call with an `auth`-kind error pointing the user at `/login openai-codex`.
+The tool is registered by default. If Pi has no `openai-codex` token, or if the ChatGPT account id cannot be found from the stored OAuth credential or decoded access token, the first `codex_search` call fails with an `auth` error that points back to `/login openai-codex`.
+
+Set `enabled: false` if you want the extension installed but hidden for a project.
 
 ## Tool
 
-The extension registers one tool:
+Default tool name:
+
+```text
+codex_search
+```
+
+Example call:
 
 ```json
 {
@@ -81,39 +92,58 @@ The extension registers one tool:
 
 Arguments:
 
-- `queries` — required array of 1–5 search questions. Each query is dispatched in parallel; results are returned grouped by query.
+- `queries` — required array of 1–5 search questions. Queries run in parallel; results are grouped by query.
 - `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
-- `freshness` — optional, `live` or `cached`; `live` enables external web access, `cached` skips it. Defaults to `live`.
+- `freshness` — optional, `live` or `cached`; defaults to `live`.
 
-The tool returns text plus a `Sources:` section when citations are available. The structured `details` object includes:
+The tool returns text. When citations are available, the text includes a `Sources:` section.
+
+The structured `details` object includes:
 
 - `model`
 - `freshness` / `searchContextSize`
 - `queryCount` / `failedQueryCount`
 - `successes`: per-query `{ query, text, citations, searchCalls, responseId?, usage? }`
-- `failures`: per-query `{ query, kind, message }` with `kind` one of `auth`, `rate_limit`, `transport`, `timeout`, `schema`, `unknown`
+- `failures`: per-query `{ query, kind, message }`
+
+Failure `kind` is one of `auth`, `rate_limit`, `transport`, `timeout`, `schema`, or `unknown`.
 
 ## Model used for search
 
 The search request needs a Codex model id. The extension chooses it in this order:
 
-1. `model` from env / project / home configuration, if set.
+1. `model` from env / project / home config, if set.
 2. The active Pi model, if it comes from the `openai-codex` provider.
 3. The default model from Codex's `/codex/models` response.
 
-Most users do not need to set anything.
+Most users do not need to set this.
 
-## Configuration
+## Settings
+
+Most users only need `/login openai-codex`. Use settings when you want to rename the tool, disable it for a project, pin a model, or change defaults.
+
+Open the interactive settings dialog:
+
+```text
+/codex-search-settings
+```
+
+Useful subcommands:
+
+```text
+/codex-search-settings status
+/codex-search-settings reset
+```
 
 Settings are merged from three layers, highest precedence first:
 
-1. Environment variables (table below).
+1. Environment variables.
 2. Project file: `<cwd>/.pi/pi-codex-search.json`.
 3. Home file: `~/.pi/pi-codex-search.json`.
 
-Each layer is optional. Missing files are skipped silently; malformed JSON or invalid values throw on load.
+Each layer is optional. Missing files are skipped. Malformed JSON or invalid values fail fast so you do not silently run with the wrong tool settings.
 
-Full schema (all fields optional):
+Full schema, all fields optional:
 
 ```json
 {
@@ -127,7 +157,9 @@ Full schema (all fields optional):
 }
 ```
 
-Set `enabled` to `false` to skip tool registration entirely (the model will not see `codex_search` at all). Useful for projects where you do not want this extension active even though it is installed globally.
+`enabled: false` skips tool registration entirely. The model will not see `codex_search` at all.
+
+`toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
 
 Environment variable equivalents:
 
@@ -141,21 +173,9 @@ Environment variable equivalents:
 | `searchContextSize` | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
 | `freshness`         | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
 
-`PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive); any other value throws on load.
+`PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 
-### Slash command
-
-`/codex-search-settings` opens an interactive settings dialog (in interactive mode). Subcommands:
-
-- `/codex-search-settings` — open the main dialog (project / home config editors, reset menu).
-- `/codex-search-settings status` — print the merged configuration and which layers contributed.
-- `/codex-search-settings reset` — open the reset menu (delete project or home config file).
-
-Each edit writes the matching scope file immediately. On dialog close, the extension calls `ctx.reload()` so the new `toolName` and defaults apply without restarting pi.
-
-### Renaming the tool
-
-The most common reason to use configuration is to avoid colliding with another extension that registers `codex_search` (or whatever default you picked). Set `toolName` in either config file or via env to expose this extension under a different name. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
+Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the new tool name and defaults apply without restarting the whole terminal.
 
 ## Notes
 
@@ -167,15 +187,11 @@ This does not add browsing to the model provider itself. It adds a Pi tool. The 
 
 Codex requests need both the access token and the ChatGPT account id. The extension first checks Pi's stored OAuth credential. If that does not include an account id, it tries to extract one from the access token.
 
-### Headers
-
-The extension builds the Codex request headers itself, including `Authorization`, `chatgpt-account-id`, `originator: pi`, `OpenAI-Beta: responses=experimental`, `accept`, and `content-type`.
-
 ## Troubleshooting
 
-### `codex_search` fails with an `auth`-kind error
+### `codex_search` fails with an `auth` error
 
-The tool is always registered, but the first call fails when Pi has no `openai-codex` token or the ChatGPT account id cannot be recovered. Run:
+Run:
 
 ```text
 /login openai-codex
@@ -187,13 +203,23 @@ If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`. The e
 
 The stored OAuth credential did not include an account id, and the extension could not decode one from the access token. Re-run `/login openai-codex` so Pi refreshes the credential.
 
+### The model does not see `codex_search`
+
+Check whether `enabled` is false in env, project config, or home config:
+
+```text
+/codex-search-settings status
+```
+
+Remember that env overrides project, and project overrides home.
+
 ### Search uses the wrong model
 
-Set `model` in your config file (or `PI_CODEX_WEB_SEARCH_MODEL`) to the Codex model id you want. If unset, the extension uses the active Codex model when possible, then falls back to the default model from `/codex/models`.
+Set `model` in your config file, or set `PI_CODEX_WEB_SEARCH_MODEL`, to the Codex model id you want. If unset, the extension uses the active Codex model when possible, then falls back to the default model from `/codex/models`.
 
 ### A different extension already registers `codex_search`
 
-Use `/codex-search-settings` to rename this extension's tool (or set `toolName` in `~/.pi/pi-codex-search.json`). Reload pi to apply.
+Use `/codex-search-settings` to rename this extension's tool, or set `toolName` in `~/.pi/pi-codex-search.json`. Tool renames apply after the settings dialog reloads Pi.
 
 ## Development
 
