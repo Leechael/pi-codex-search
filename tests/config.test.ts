@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   CONFIG_FILE_NAME,
+  DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
   DEFAULT_SEARCH_CONTEXT_SIZE,
   DEFAULT_TOOL_NAME,
@@ -15,6 +16,7 @@ import {
 } from "../src/config.ts";
 
 const ENV_KEYS = [
+  "PI_CODEX_WEB_SEARCH_ENABLED",
   "PI_CODEX_WEB_SEARCH_TOOL_NAME",
   "PI_CODEX_WEB_SEARCH_MODEL",
   "PI_CODEX_WEB_SEARCH_BASE_URL",
@@ -55,11 +57,55 @@ describe("config loader", () => {
 
   it("returns defaults when no files or env are present", async () => {
     const resolved = await loadConfig(cwd);
+    assert.equal(resolved.enabled, DEFAULT_ENABLED);
     assert.equal(resolved.toolName, DEFAULT_TOOL_NAME);
     assert.equal(resolved.defaultFreshness, DEFAULT_FRESHNESS);
     assert.equal(resolved.defaultSearchContextSize, DEFAULT_SEARCH_CONTEXT_SIZE);
     assert.equal(resolved.model, undefined);
     assert.deepEqual(resolved.sources, {});
+  });
+
+  it("reads enabled=false from the project file", async () => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ enabled: false }),
+      "utf-8",
+    );
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.enabled, false);
+  });
+
+  it("env overrides enabled with case-insensitive true/false", async () => {
+    await mkdir(join(home, ".pi"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ enabled: false }),
+      "utf-8",
+    );
+
+    process.env.PI_CODEX_WEB_SEARCH_ENABLED = "TRUE";
+    let resolved = await loadConfig(cwd);
+    assert.equal(resolved.enabled, true);
+
+    process.env.PI_CODEX_WEB_SEARCH_ENABLED = "False";
+    resolved = await loadConfig(cwd);
+    assert.equal(resolved.enabled, false);
+  });
+
+  it("rejects a non-boolean enabled in the file", async () => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ enabled: "yes" }),
+      "utf-8",
+    );
+    await assert.rejects(loadConfig(cwd), /Invalid enabled/);
+  });
+
+  it("rejects an unparseable enabled env value", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_ENABLED = "maybe";
+    await assert.rejects(loadConfig(cwd), /PI_CODEX_WEB_SEARCH_ENABLED/);
   });
 
   it("reads the home config when only the home file exists", async () => {

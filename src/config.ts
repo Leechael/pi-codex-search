@@ -8,6 +8,7 @@ export type Freshness = "live" | "cached";
 export type ConfigScope = "project" | "home";
 
 export interface PiCodexSearchConfig {
+  enabled?: boolean;
   toolName?: string;
   model?: string;
   baseUrl?: string;
@@ -17,6 +18,7 @@ export interface PiCodexSearchConfig {
 }
 
 export interface ResolvedConfig {
+  enabled: boolean;
   toolName: string;
   model?: string;
   baseUrl?: string;
@@ -30,6 +32,7 @@ export interface ResolvedConfig {
   };
 }
 
+export const DEFAULT_ENABLED = true;
 export const DEFAULT_TOOL_NAME = "codex_search";
 export const DEFAULT_SEARCH_CONTEXT_SIZE: SearchContextSize = "medium";
 export const DEFAULT_FRESHNESS: Freshness = "live";
@@ -55,6 +58,7 @@ export async function loadConfig(cwd: string): Promise<ResolvedConfig> {
   };
 
   const resolved: ResolvedConfig = {
+    enabled: merged.enabled ?? DEFAULT_ENABLED,
     toolName: merged.toolName ?? DEFAULT_TOOL_NAME,
     defaultSearchContextSize: merged.searchContextSize ?? DEFAULT_SEARCH_CONTEXT_SIZE,
     defaultFreshness: merged.freshness ?? DEFAULT_FRESHNESS,
@@ -118,6 +122,8 @@ async function readConfigFile(filePath: string): Promise<PiCodexSearchConfig | u
 
 function readEnvConfig(): PiCodexSearchConfig | undefined {
   const env: PiCodexSearchConfig = {};
+  const enabled = booleanEnv("PI_CODEX_WEB_SEARCH_ENABLED");
+  if (enabled !== undefined) env.enabled = enabled;
   const toolName = trimmedEnv("PI_CODEX_WEB_SEARCH_TOOL_NAME");
   if (toolName !== undefined) env.toolName = toolName;
   const model = trimmedEnv("PI_CODEX_WEB_SEARCH_MODEL");
@@ -139,6 +145,11 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
 }
 
 function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void {
+  if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
+    throw new Error(
+      `Invalid enabled in ${sourceLabel}: ${JSON.stringify(config.enabled)}. Must be a boolean.`,
+    );
+  }
   if (config.toolName !== undefined && !TOOL_NAME_PATTERN.test(config.toolName)) {
     throw new Error(
       `Invalid toolName in ${sourceLabel}: ${JSON.stringify(config.toolName)}. ` +
@@ -173,6 +184,15 @@ function trimmedEnv(name: string): string | undefined {
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
   return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function booleanEnv(name: string): boolean | undefined {
+  const raw = trimmedEnv(name);
+  if (raw === undefined) return undefined;
+  const lower = raw.toLowerCase();
+  if (lower === "true") return true;
+  if (lower === "false") return false;
+  throw new Error(`Invalid ${name}: ${JSON.stringify(raw)}. Expected 'true' or 'false'.`);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

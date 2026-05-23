@@ -310,6 +310,7 @@ export default function codexWebSearchExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     const config = await loadConfig(ctx.cwd);
+    if (!config.enabled) return;
     pi.registerTool(buildTool(config));
   });
 }

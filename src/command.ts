@@ -2,6 +2,7 @@ import { relative } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   type ConfigScope,
+  DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
   DEFAULT_SEARCH_CONTEXT_SIZE,
   DEFAULT_TOOL_NAME,
@@ -114,6 +115,7 @@ async function editScope(ctx: ExtensionCommandContext, scope: ConfigScope): Prom
     const current: PiCodexSearchConfig = { ...resolved.sources[scope] };
 
     const choice = await ctx.ui.select(`Edit ${scope} config (${displayPath})`, [
+      `Enabled → ${formatValue(current.enabled?.toString(), String(DEFAULT_ENABLED))}`,
       `Tool name → ${formatValue(current.toolName, DEFAULT_TOOL_NAME)}`,
       `Model → ${formatValue(current.model, "auto")}`,
       `Base URL → ${formatValue(current.baseUrl, "default")}`,
@@ -125,6 +127,13 @@ async function editScope(ctx: ExtensionCommandContext, scope: ConfigScope): Prom
 
     if (!choice || choice === "Back") return saved;
 
+    if (choice.startsWith("Enabled")) {
+      const value = await ctx.ui.select("Enabled", ["true", "false", "Clear"]);
+      if (!value) continue;
+      const next = value === "Clear" ? undefined : value === "true";
+      if (await applyBooleanField(ctx, scope, current, "enabled", next)) saved = true;
+      continue;
+    }
     if (choice.startsWith("Tool name")) {
       const value = await ctx.ui.input("Tool name (empty to clear)", current.toolName ?? "");
       if (value === undefined) continue;
@@ -235,6 +244,22 @@ async function applyEnumField<K extends "searchContextSize" | "freshness">(
   return await persist(ctx, scope, next, key);
 }
 
+async function applyBooleanField(
+  ctx: ExtensionCommandContext,
+  scope: ConfigScope,
+  current: PiCodexSearchConfig,
+  key: "enabled",
+  value: boolean | undefined,
+): Promise<boolean> {
+  const next: PiCodexSearchConfig = { ...current };
+  if (value === undefined) {
+    delete next[key];
+  } else {
+    next[key] = value;
+  }
+  return await persist(ctx, scope, next, key);
+}
+
 async function persist(
   ctx: ExtensionCommandContext,
   scope: ConfigScope,
@@ -259,7 +284,7 @@ async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
 function buildMainTitle(resolved: ResolvedConfig, cwd: string): string {
   return [
     "Codex Search settings",
-    `Effective: tool=${resolved.toolName}, model=${resolved.model ?? "(auto)"}, freshness=${resolved.defaultFreshness}, contextSize=${resolved.defaultSearchContextSize}`,
+    `Effective: enabled=${resolved.enabled}, tool=${resolved.toolName}, model=${resolved.model ?? "(auto)"}, freshness=${resolved.defaultFreshness}, contextSize=${resolved.defaultSearchContextSize}`,
     `Project file: ${relative(cwd, getConfigPath("project", cwd))}${resolved.sources.project ? "" : " (absent)"}`,
     `Home file: ${homeRelative(getConfigPath("home", cwd))}${resolved.sources.home ? "" : " (absent)"}`,
   ].join("\n");
@@ -267,6 +292,7 @@ function buildMainTitle(resolved: ResolvedConfig, cwd: string): string {
 
 function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   const lines = ["Codex Search settings:"];
+  lines.push(`  enabled             = ${resolved.enabled}`);
   lines.push(`  toolName            = ${resolved.toolName}`);
   lines.push(`  model               = ${resolved.model ?? "(auto from /codex/models)"}`);
   lines.push(`  baseUrl             = ${resolved.baseUrl ?? "(default)"}`);
