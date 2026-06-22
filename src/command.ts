@@ -208,11 +208,6 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
   let dirty = false;
 
   let models: CodexModel[] = [];
-  try {
-    models = await loadModels(ctx, resolved);
-  } catch (error) {
-    ctx.ui.notify(`Could not load model list: ${(error as Error).message}`, "warning");
-  }
 
   await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => {
     const settingsTheme = buildSettingsTheme(theme);
@@ -301,6 +296,26 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
         }),
       ),
     ];
+
+    const modelItem = items.find((i) => i.id === "model");
+    if (modelItem) modelItem.description = "Loading models via /codex/models…";
+
+    loadModels(ctx, resolved)
+      .then((loaded) => {
+        models = loaded;
+        if (modelItem) {
+          modelItem.description =
+            loaded.length === 0
+              ? "No models loaded from /codex/models (default = auto-select)"
+              : `Pick from ${loaded.length} model${loaded.length === 1 ? "" : "s"} loaded via /codex/models (default = auto-select)`;
+        }
+      })
+      .catch((error: unknown) => {
+        if (modelItem) {
+          modelItem.description = "Could not load models from /codex/models (default = auto-select)";
+        }
+        ctx.ui.notify(`Could not load model list: ${(error as Error).message}`, "warning");
+      });
 
     list = new SettingsList(items, items.length, settingsTheme, onChange, () => done(), {
       enableSearch: true,
