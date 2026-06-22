@@ -2,3 +2,4 @@ node_modules/
 storage/
 web_search.js
 *.tgz
+.pi

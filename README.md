@@ -25,7 +25,7 @@ This extension is for Pi workflows that need fresh or source-backed information:
 
 - A `codex_search` Pi tool.
 - 1–5 search queries per call, run in parallel.
-- Standalone `/alpha/search` by default, with the older `/codex/responses` web-search path still available.
+- Responses API by default, with the standalone `/alpha/search` path still available.
 - `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
@@ -145,6 +145,8 @@ Settings are merged from three layers, highest precedence first:
 
 Each layer is optional. Missing files are skipped. Malformed JSON or invalid values fail fast so you do not silently run with the wrong tool settings.
 
+Because the project file lives under `<cwd>/.pi/`, it follows Pi's project trust rules. If you decline to trust a project, the extension reads only the home file and environment variables; the project scope is hidden in the settings dialog and cannot be saved or deleted until the project is trusted.
+
 Full schema, all fields optional:
 
 ```json
@@ -156,7 +158,7 @@ Full schema, all fields optional:
   "clientVersion": "1.0.0",
   "searchContextSize": "medium",
   "freshness": "live",
-  "searchApi": "standalone"
+  "searchApi": "responses"
 }
 ```
 
@@ -181,7 +183,7 @@ Environment variable equivalents:
 
 `PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 
-Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the new tool name and defaults apply without restarting the whole terminal.
+The settings dialog shows a unified `SettingsList` view. The model picker loads available Codex models asynchronously after the dialog opens, so the UI appears immediately even when `/codex/models` is slow. Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the new tool name and defaults apply without restarting the whole terminal.
 
 ## Notes
 

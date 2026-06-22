@@ -38,7 +38,7 @@ export const DEFAULT_ENABLED = true;
 export const DEFAULT_TOOL_NAME = "codex_search";
 export const DEFAULT_SEARCH_CONTEXT_SIZE: SearchContextSize = "medium";
 export const DEFAULT_FRESHNESS: Freshness = "live";
-export const DEFAULT_SEARCH_API: SearchApi = "standalone";
+export const DEFAULT_SEARCH_API: SearchApi = "responses";
 export const CONFIG_FILE_NAME = "pi-codex-search.json";
 const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const CONTEXT_SIZES: readonly SearchContextSize[] = ["low", "medium", "high"] as const;
@@ -50,9 +50,11 @@ export function getConfigPath(scope: ConfigScope, cwd: string): string {
   return join(homedir(), ".pi", CONFIG_FILE_NAME);
 }
 
-export async function loadConfig(cwd: string): Promise<ResolvedConfig> {
+export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<ResolvedConfig> {
   const homeConfig = await readConfigFile(getConfigPath("home", cwd));
-  const projectConfig = await readConfigFile(getConfigPath("project", cwd));
+  const projectConfig = isProjectTrusted
+    ? await readConfigFile(getConfigPath("project", cwd))
+    : undefined;
   const envConfig = readEnvConfig();
 
   const merged: PiCodexSearchConfig = {

@@ -148,6 +148,27 @@ describe("config loader", () => {
     assert.ok(resolved.sources.project);
   });
 
+  it("skips the project file when the project is not trusted", async () => {
+    await mkdir(join(home, ".pi"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ toolName: "home_search", model: "home_model" }),
+      "utf-8",
+    );
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ toolName: "project_search" }),
+      "utf-8",
+    );
+
+    const resolved = await loadConfig(cwd, false);
+    assert.equal(resolved.toolName, "home_search");
+    assert.equal(resolved.model, "home_model");
+    assert.ok(resolved.sources.home);
+    assert.equal(resolved.sources.project, undefined);
+  });
+
   it("lets env override files", async () => {
     await mkdir(join(cwd, ".pi"), { recursive: true });
     await writeFile(

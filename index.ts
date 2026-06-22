@@ -315,7 +315,7 @@ export default function codexWebSearchExtension(pi: ExtensionAPI) {
   registerSettingsCommand(pi);
 
   pi.on("session_start", async (_event, ctx) => {
-    const config = await loadConfig(ctx.cwd);
+    const config = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
     if (!config.enabled) return;
     pi.registerTool(buildTool(config));
   });
