@@ -1,5 +1,14 @@
 import { relative } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  type Component,
+  Input,
+  type SelectItem,
+  SelectList,
+  type SettingItem,
+  SettingsList,
+} from "@earendil-works/pi-tui";
+import { type CodexModel, extractAccountIdFromToken, fetchCodexModels } from "./codex.ts";
 import {
   type ConfigScope,
   DEFAULT_ENABLED,
@@ -8,17 +17,138 @@ import {
   DEFAULT_SEARCH_CONTEXT_SIZE,
   DEFAULT_TOOL_NAME,
   deleteConfig,
-  type Freshness,
   getConfigPath,
   loadConfig,
   type PiCodexSearchConfig,
   type ResolvedConfig,
   saveConfig,
 } from "./config.ts";
-import type { SearchApi, SearchContextSize } from "./codex.ts";
 
 const COMMAND_NAME = "codex-search-settings";
 const SUBCOMMANDS = ["status", "reset"] as const;
+const OPENAI_CODEX_PROVIDER = "openai-codex";
+
+const DEFAULT_SUFFIX = " (default)";
+const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
+const isDefaultTag = (value: string): boolean => value.endsWith(DEFAULT_SUFFIX);
+
+interface CycleField {
+  id: string;
+  label: string;
+  description: string;
+  values: string[];
+  get(cfg: PiCodexSearchConfig): string;
+  apply(cfg: PiCodexSearchConfig, value: string): void;
+}
+
+interface TextField {
+  id: string;
+  label: string;
+  description: string;
+  /** Shown (tagged as default) when the field is not set in the active scope. */
+  defaultDisplay: string;
+  get(cfg: PiCodexSearchConfig): string | undefined;
+  apply(cfg: PiCodexSearchConfig, value: string): void;
+}
+
+// The default value is shown first as "<value> (default)"; selecting it clears the field.
+const CYCLE_FIELDS: CycleField[] = [
+  {
+    id: "enabled",
+    label: "Enabled",
+    description: "Register the search tool at session start",
+    values: [defaultTag(String(DEFAULT_ENABLED)), "false"],
+    get: (c) => (c.enabled === undefined ? defaultTag(String(DEFAULT_ENABLED)) : String(c.enabled)),
+    apply: (c, v) => {
+      if (isDefaultTag(v)) delete c.enabled;
+      else c.enabled = v === "true";
+    },
+  },
+  {
+    id: "searchApi",
+    label: "Search API",
+    description: "responses (stable) or standalone (experimental) backend",
+    values: [defaultTag(DEFAULT_SEARCH_API), "standalone"],
+    get: (c) => c.searchApi ?? defaultTag(DEFAULT_SEARCH_API),
+    apply: (c, v) => {
+      if (isDefaultTag(v)) delete c.searchApi;
+      else c.searchApi = v as PiCodexSearchConfig["searchApi"];
+    },
+  },
+  {
+    id: "freshness",
+    label: "Freshness",
+    description: "live / indexed / cached web access",
+    values: [defaultTag(DEFAULT_FRESHNESS), "cached", "indexed"],
+    get: (c) => c.freshness ?? defaultTag(DEFAULT_FRESHNESS),
+    apply: (c, v) => {
+      if (isDefaultTag(v)) delete c.freshness;
+      else c.freshness = v as PiCodexSearchConfig["freshness"];
+    },
+  },
+  {
+    id: "searchContextSize",
+    label: "Search context size",
+    description: "Amount of web context to retrieve",
+    values: [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
+    get: (c) => c.searchContextSize ?? defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE),
+    apply: (c, v) => {
+      if (isDefaultTag(v)) delete c.searchContextSize;
+      else c.searchContextSize = v as PiCodexSearchConfig["searchContextSize"];
+    },
+  },
+];
+
+const TEXT_FIELDS: TextField[] = [
+  {
+    id: "toolName",
+    label: "Tool name",
+    description: "Tool name exposed to the LLM",
+    defaultDisplay: DEFAULT_TOOL_NAME,
+    get: (c) => c.toolName,
+    apply: (c, v) => {
+      if (v) c.toolName = v;
+      else delete c.toolName;
+    },
+  },
+  {
+    id: "model",
+    label: "Model",
+    description: "Pick from models loaded via /codex/models (default = auto-select)",
+    defaultDisplay: "auto",
+    get: (c) => c.model,
+    apply: (c, v) => {
+      if (v) c.model = v;
+      else delete c.model;
+    },
+  },
+  {
+    id: "baseUrl",
+    label: "Base URL",
+    description: "Codex backend base URL",
+    defaultDisplay: "built-in",
+    get: (c) => c.baseUrl,
+    apply: (c, v) => {
+      if (v) c.baseUrl = v;
+      else delete c.baseUrl;
+    },
+  },
+  {
+    id: "clientVersion",
+    label: "Client version",
+    description: "Client version sent to /codex/models",
+    defaultDisplay: "built-in",
+    get: (c) => c.clientVersion,
+    apply: (c, v) => {
+      if (v) c.clientVersion = v;
+      else delete c.clientVersion;
+    },
+  },
+];
+
+function textDisplay(field: TextField, cfg: PiCodexSearchConfig): string {
+  return field.get(cfg) ?? defaultTag(field.defaultDisplay);
+}
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand(COMMAND_NAME, {
@@ -33,7 +163,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
       try {
         if (!trimmed) {
           if (ctx.hasUI) {
-            await openMainDialog(ctx);
+            await openSettingsMenu(ctx);
             return;
           }
           await printStatus(ctx);
@@ -67,127 +197,166 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
   });
 }
 
-async function openMainDialog(ctx: ExtensionCommandContext): Promise<void> {
+async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
+  const resolved = await loadConfig(ctx.cwd);
+  const drafts: Record<ConfigScope, PiCodexSearchConfig> = {
+    project: { ...resolved.sources.project },
+    home: { ...resolved.sources.home },
+  };
+  let scope: ConfigScope = "project";
   let dirty = false;
 
-  while (true) {
-    const resolved = await loadConfig(ctx.cwd);
-    const choice = await ctx.ui.select(buildMainTitle(resolved, ctx.cwd), [
-      "Show current configuration",
-      `Edit project config (${relative(ctx.cwd, getConfigPath("project", ctx.cwd))})`,
-      `Edit home config (${homeRelative(getConfigPath("home", ctx.cwd))})`,
-      "Reset configuration…",
-      "Done",
-    ]);
-
-    if (!choice || choice === "Done") break;
-
-    if (choice === "Show current configuration") {
-      ctx.ui.notify(formatStatus(resolved, ctx.cwd));
-      continue;
-    }
-    if (choice.startsWith("Edit project")) {
-      if (await editScope(ctx, "project")) dirty = true;
-      continue;
-    }
-    if (choice.startsWith("Edit home")) {
-      if (await editScope(ctx, "home")) dirty = true;
-      continue;
-    }
-    if (choice.startsWith("Reset")) {
-      if (await openResetMenu(ctx)) dirty = true;
-      continue;
-    }
+  let models: CodexModel[] = [];
+  try {
+    models = await loadModels(ctx, resolved);
+  } catch (error) {
+    ctx.ui.notify(`Could not load model list: ${(error as Error).message}`, "warning");
   }
 
-  if (dirty) {
-    // ctx is stale after reload — dialog is already closed at this point.
-    await ctx.reload();
-  }
+  await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => {
+    const settingsTheme = buildSettingsTheme(theme);
+    const selectTheme = buildSelectTheme(theme);
+
+    let list: SettingsList;
+
+    const refreshDisplays = () => {
+      for (const f of CYCLE_FIELDS) list.updateValue(f.id, f.get(drafts[scope]));
+      for (const f of TEXT_FIELDS) list.updateValue(f.id, textDisplay(f, drafts[scope]));
+    };
+
+    const save = () => {
+      saveConfig(scope, ctx.cwd, drafts[scope])
+        .then(() => {
+          dirty = true;
+        })
+        .catch((error: unknown) => {
+          ctx.ui.notify((error as Error).message, "error");
+        });
+    };
+
+    const onChange = (id: string, newValue: string) => {
+      if (id === "scope") {
+        scope = newValue as ConfigScope;
+        refreshDisplays();
+        return;
+      }
+      const cycle = CYCLE_FIELDS.find((f) => f.id === id);
+      if (cycle) {
+        cycle.apply(drafts[scope], newValue);
+        save();
+        return;
+      }
+      const text = TEXT_FIELDS.find((f) => f.id === id);
+      if (text) {
+        text.apply(drafts[scope], newValue.trim());
+        list.updateValue(id, textDisplay(text, drafts[scope]));
+        save();
+      }
+    };
+
+    const items: SettingItem[] = [
+      {
+        id: "scope",
+        label: "Config scope",
+        description: "Which config file these edits write to",
+        currentValue: scope,
+        values: ["project", "home"],
+      },
+      ...CYCLE_FIELDS.map(
+        (f): SettingItem => ({
+          id: f.id,
+          label: f.label,
+          description: f.description,
+          currentValue: f.get(drafts[scope]),
+          values: f.values,
+        }),
+      ),
+      ...TEXT_FIELDS.map(
+        (f): SettingItem => ({
+          id: f.id,
+          label: f.label,
+          description: f.description,
+          currentValue: textDisplay(f, drafts[scope]),
+          submenu:
+            f.id === "model"
+              ? (_current, submenuDone) =>
+                  buildModelSelect(models, drafts[scope].model, selectTheme, submenuDone)
+              : (_current, submenuDone) => {
+                  const input = new Input();
+                  input.setValue(f.get(drafts[scope]) ?? "");
+                  input.onSubmit = (value) => submenuDone(value);
+                  input.onEscape = () => submenuDone();
+                  return input;
+                },
+        }),
+      ),
+    ];
+
+    list = new SettingsList(items, items.length, settingsTheme, onChange, () => done(), {
+      enableSearch: true,
+    });
+    return list as Component;
+  });
+
+  if (dirty) await ctx.reload();
 }
 
-async function editScope(ctx: ExtensionCommandContext, scope: ConfigScope): Promise<boolean> {
-  const filePath = getConfigPath(scope, ctx.cwd);
-  const displayPath = scope === "home" ? homeRelative(filePath) : relative(ctx.cwd, filePath);
-  let saved = false;
+function buildSettingsTheme(theme: Theme) {
+  return {
+    label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
+    value: (text: string, selected: boolean) =>
+      selected ? theme.bold(theme.fg("accent", text)) : theme.fg("muted", text),
+    description: (text: string) => theme.fg("dim", text),
+    cursor: theme.fg("accent", "> "),
+    hint: (text: string) => theme.fg("dim", text),
+  };
+}
 
-  while (true) {
-    const resolved = await loadConfig(ctx.cwd);
-    const current: PiCodexSearchConfig = { ...resolved.sources[scope] };
+function buildSelectTheme(theme: Theme) {
+  return {
+    selectedPrefix: (text: string) => theme.fg("accent", text),
+    selectedText: (text: string) => theme.bold(theme.fg("accent", text)),
+    description: (text: string) => theme.fg("dim", text),
+    scrollInfo: (text: string) => theme.fg("dim", text),
+    noMatch: (text: string) => theme.fg("warning", text),
+  };
+}
 
-    const choice = await ctx.ui.select(`Edit ${scope} config (${displayPath})`, [
-      `Enabled → ${formatValue(current.enabled?.toString(), String(DEFAULT_ENABLED))}`,
-      `Tool name → ${formatValue(current.toolName, DEFAULT_TOOL_NAME)}`,
-      `Model → ${formatValue(current.model, "auto")}`,
-      `Base URL → ${formatValue(current.baseUrl, "default")}`,
-      `Client version → ${formatValue(current.clientVersion, "default")}`,
-      `Search context size → ${formatValue(current.searchContextSize, DEFAULT_SEARCH_CONTEXT_SIZE)}`,
-      `Freshness → ${formatValue(current.freshness, DEFAULT_FRESHNESS)}`,
-      `Search API → ${formatValue(current.searchApi, DEFAULT_SEARCH_API)}`,
-      "Back",
-    ]);
+function buildModelSelect(
+  models: CodexModel[],
+  current: string | undefined,
+  theme: ReturnType<typeof buildSelectTheme>,
+  done: (value?: string) => void,
+): Component {
+  const items: SelectItem[] = [
+    { value: "", label: defaultTag("auto"), description: "Auto-select from /codex/models" },
+    ...models.map((m): SelectItem => ({ value: m.id, label: m.id, description: m.name })),
+  ];
+  const select = new SelectList(items, Math.min(items.length, 10), theme);
+  const currentIndex = items.findIndex((i) => i.value === (current ?? ""));
+  if (currentIndex >= 0) select.setSelectedIndex(currentIndex);
+  select.onSelect = (item) => done(item.value);
+  select.onCancel = () => done();
+  return select;
+}
 
-    if (!choice || choice === "Back") return saved;
+async function loadModels(
+  ctx: ExtensionCommandContext,
+  resolved: ResolvedConfig,
+): Promise<CodexModel[]> {
+  const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
+  if (!token) return [];
+  const credential = ctx.modelRegistry.authStorage.get(OPENAI_CODEX_PROVIDER);
+  const accountId =
+    credential?.type === "oauth" && typeof credential.accountId === "string"
+      ? credential.accountId
+      : extractAccountIdFromToken(token);
+  if (!accountId) return [];
 
-    if (choice.startsWith("Enabled")) {
-      const value = await ctx.ui.select("Enabled", ["true", "false", "Clear"]);
-      if (!value) continue;
-      const next = value === "Clear" ? undefined : value === "true";
-      if (await applyBooleanField(ctx, scope, current, "enabled", next)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Tool name")) {
-      const value = await ctx.ui.input("Tool name (empty to clear)", current.toolName ?? "");
-      if (value === undefined) continue;
-      if (await applyTextField(ctx, scope, current, "toolName", value)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Model")) {
-      const value = await ctx.ui.input("Codex model id (empty to clear)", current.model ?? "");
-      if (value === undefined) continue;
-      if (await applyTextField(ctx, scope, current, "model", value)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Base URL")) {
-      const value = await ctx.ui.input(
-        "Codex backend base URL (empty to clear)",
-        current.baseUrl ?? "",
-      );
-      if (value === undefined) continue;
-      if (await applyTextField(ctx, scope, current, "baseUrl", value)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Client version")) {
-      const value = await ctx.ui.input(
-        "Client version sent to /codex/models (empty to clear)",
-        current.clientVersion ?? "",
-      );
-      if (value === undefined) continue;
-      if (await applyTextField(ctx, scope, current, "clientVersion", value)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Search context size")) {
-      const value = await ctx.ui.select("Search context size", ["low", "medium", "high", "Clear"]);
-      if (!value) continue;
-      const next = value === "Clear" ? undefined : (value as SearchContextSize);
-      if (await applyEnumField(ctx, scope, current, "searchContextSize", next)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Freshness")) {
-      const value = await ctx.ui.select("Freshness", ["live", "cached", "indexed", "Clear"]);
-      if (!value) continue;
-      const next = value === "Clear" ? undefined : (value as Freshness);
-      if (await applyEnumField(ctx, scope, current, "freshness", next)) saved = true;
-      continue;
-    }
-    if (choice.startsWith("Search API")) {
-      const value = await ctx.ui.select("Search API", ["standalone", "responses", "Clear"]);
-      if (!value) continue;
-      const next = value === "Clear" ? undefined : (value as SearchApi);
-      if (await applyEnumField(ctx, scope, current, "searchApi", next)) saved = true;
-      continue;
-    }
-  }
+  const opts: Parameters<typeof fetchCodexModels>[0] = { token, accountId };
+  if (resolved.baseUrl !== undefined) opts.baseUrl = resolved.baseUrl;
+  if (resolved.clientVersion !== undefined) opts.clientVersion = resolved.clientVersion;
+  return fetchCodexModels(opts);
 }
 
 async function openResetMenu(ctx: ExtensionCommandContext): Promise<boolean> {
@@ -220,83 +389,9 @@ async function openResetMenu(ctx: ExtensionCommandContext): Promise<boolean> {
   }
 }
 
-async function applyTextField(
-  ctx: ExtensionCommandContext,
-  scope: ConfigScope,
-  current: PiCodexSearchConfig,
-  key: "toolName" | "model" | "baseUrl" | "clientVersion",
-  value: string,
-): Promise<boolean> {
-  const next: PiCodexSearchConfig = { ...current };
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    delete next[key];
-  } else {
-    next[key] = trimmed;
-  }
-  return await persist(ctx, scope, next, key);
-}
-
-async function applyEnumField<K extends "searchContextSize" | "freshness" | "searchApi">(
-  ctx: ExtensionCommandContext,
-  scope: ConfigScope,
-  current: PiCodexSearchConfig,
-  key: K,
-  value: PiCodexSearchConfig[K] | undefined,
-): Promise<boolean> {
-  const next: PiCodexSearchConfig = { ...current };
-  if (value === undefined) {
-    delete next[key];
-  } else {
-    next[key] = value;
-  }
-  return await persist(ctx, scope, next, key);
-}
-
-async function applyBooleanField(
-  ctx: ExtensionCommandContext,
-  scope: ConfigScope,
-  current: PiCodexSearchConfig,
-  key: "enabled",
-  value: boolean | undefined,
-): Promise<boolean> {
-  const next: PiCodexSearchConfig = { ...current };
-  if (value === undefined) {
-    delete next[key];
-  } else {
-    next[key] = value;
-  }
-  return await persist(ctx, scope, next, key);
-}
-
-async function persist(
-  ctx: ExtensionCommandContext,
-  scope: ConfigScope,
-  next: PiCodexSearchConfig,
-  field: string,
-): Promise<boolean> {
-  try {
-    const filePath = await saveConfig(scope, ctx.cwd, next);
-    ctx.ui.notify(`Saved ${field} to ${filePath}.`);
-    return true;
-  } catch (error) {
-    ctx.ui.notify((error as Error).message, "error");
-    return false;
-  }
-}
-
 async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
   const resolved = await loadConfig(ctx.cwd);
   notify(ctx, formatStatus(resolved, ctx.cwd));
-}
-
-function buildMainTitle(resolved: ResolvedConfig, cwd: string): string {
-  return [
-    "Codex Search settings",
-    `Effective: enabled=${resolved.enabled}, tool=${resolved.toolName}, model=${resolved.model ?? "(auto)"}, api=${resolved.searchApi}, freshness=${resolved.defaultFreshness}, contextSize=${resolved.defaultSearchContextSize}`,
-    `Project file: ${relative(cwd, getConfigPath("project", cwd))}${resolved.sources.project ? "" : " (absent)"}`,
-    `Home file: ${homeRelative(getConfigPath("home", cwd))}${resolved.sources.home ? "" : " (absent)"}`,
-  ].join("\n");
 }
 
 function formatStatus(resolved: ResolvedConfig, cwd: string): string {
@@ -326,10 +421,6 @@ function describeSource(config: PiCodexSearchConfig | undefined): string {
   const keys = Object.keys(config);
   if (keys.length === 0) return "(empty)";
   return keys.sort().join(", ");
-}
-
-function formatValue(value: string | undefined, fallback: string): string {
-  return value ?? `(default: ${fallback})`;
 }
 
 function homeRelative(filePath: string): string {
