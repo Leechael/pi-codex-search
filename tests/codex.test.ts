@@ -6,12 +6,14 @@ import {
   extractAccountIdFromToken,
   fetchCodexModels,
   fetchCodexStandaloneSearch,
+  fetchCodexStandaloneSearchBatch,
   fetchCodexWebSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
   selectDefaultModel,
 } from "../src/codex.ts";
+import { formatQueryPreviewLines } from "../index.ts";
 
 describe("codex helpers", () => {
   it("normalizes codex base URLs", () => {
@@ -143,6 +145,93 @@ describe("codex helpers", () => {
     ]);
   });
 
+  it("batches standalone queries into one /alpha/search request", async () => {
+    let requestedBody: unknown;
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          output: "Batch result",
+        }),
+      );
+    };
+
+    const result = await fetchCodexStandaloneSearchBatch({
+      queries: ["OpenAI news", "Codex release notes"],
+      token: "token",
+      accountId: "account",
+      model: "gpt-test",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.deepEqual(requestedBody, {
+      id: "pi-codex-search",
+      model: "gpt-test",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "OpenAI news\nCodex release notes" }],
+        },
+      ],
+      commands: {
+        search_query: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
+      },
+      settings: {
+        search_context_size: "medium",
+        allowed_callers: ["direct"],
+        external_web_access: true,
+      },
+    });
+    assert.equal(result.text, "Batch result");
+    assert.deepEqual(
+      result.searchCalls.map((call) => call.query),
+      ["OpenAI news", "Codex release notes"],
+    );
+  });
+
+  it("sets response_length for standalone batches above three queries", async () => {
+    let requestedBody = {} as { commands?: { response_length?: string } };
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ output: "Batch result" }));
+    };
+
+    await fetchCodexStandaloneSearchBatch({
+      queries: ["q1", "q2", "q3", "q4"],
+      token: "token",
+      accountId: "account",
+      model: "gpt-test",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedBody.commands?.response_length, "medium");
+  });
+
+  it("rejects empty standalone query batches", async () => {
+    await assert.rejects(
+      fetchCodexStandaloneSearchBatch({
+        queries: [" ", ""],
+        token: "token",
+        accountId: "account",
+        model: "gpt-test",
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "schema");
+        return true;
+      },
+    );
+  });
+
+  it("formats query preview lines without result snippets", () => {
+    assert.deepEqual(formatQueryPreviewLines(["first query", "second query"]), [
+      "  ⌕ 1. first query",
+      "  ⌕ 2. second query",
+    ]);
+  });
+
   it("returns a concise Cloudflare error for standalone search 403", async () => {
     const fetchImpl = async () =>
       new Response("<html><title>Just a moment...</title><body>Cloudflare</body></html>", {
@@ -167,6 +256,39 @@ describe("codex helpers", () => {
         assert.match(error.message, /Cloudflare blocked the request/);
         assert.match(error.message, /searchApi=responses/);
         assert.doesNotMatch(error.message, /<html>/);
+        return true;
+      },
+    );
+  });
+
+  it("does not return raw HTML bodies to the model", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        "<html><head><title>Forbidden &amp; blocked</title></head><body>secret challenge</body></html>",
+        {
+          status: 403,
+          statusText: "Forbidden",
+          headers: { "content-type": "text/html" },
+        },
+      );
+
+    await assert.rejects(
+      fetchCodexStandaloneSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 403);
+        assert.match(error.message, /HTTP 403/);
+        assert.match(error.message, /HTML page title: Forbidden & blocked/);
+        assert.doesNotMatch(error.message, /<html>/);
+        assert.doesNotMatch(error.message, /secret challenge/);
         return true;
       },
     );

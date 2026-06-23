@@ -72,6 +72,19 @@ export interface CodexStandaloneSearchOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface CodexStandaloneSearchBatchOptions {
+  queries: string[];
+  token: string;
+  accountId: string;
+  model: string;
+  baseUrl?: string;
+  externalWebAccess?: StandaloneExternalWebAccess;
+  searchContextSize?: SearchContextSize;
+  sessionId?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
 export interface CodexCitation {
   title?: string;
   url: string;
@@ -267,6 +280,20 @@ export function selectDefaultModel(models: CodexModel[]): string | undefined {
 export async function fetchCodexStandaloneSearch(
   options: CodexStandaloneSearchOptions,
 ): Promise<CodexWebSearchResult> {
+  return await fetchCodexStandaloneSearchBatch({
+    ...options,
+    queries: [options.query],
+  });
+}
+
+export async function fetchCodexStandaloneSearchBatch(
+  options: CodexStandaloneSearchBatchOptions,
+): Promise<CodexWebSearchResult> {
+  const queries = options.queries.map((query) => query.trim()).filter((query) => query.length > 0);
+  if (queries.length === 0) {
+    throw new CodexError("schema", "Codex standalone search requires at least one query");
+  }
+
   const fetcher = options.fetchImpl ?? fetch;
   const headers = buildCodexHeaders(options.token, options.accountId, "application/json");
   headers.set("content-type", "application/json");
@@ -274,7 +301,7 @@ export async function fetchCodexStandaloneSearch(
   const response = await fetcher(resolveCodexSearchEndpoint(options.baseUrl), {
     method: "POST",
     headers,
-    body: JSON.stringify(buildStandaloneSearchRequestBody(options)),
+    body: JSON.stringify(buildStandaloneSearchRequestBody({ ...options, queries })),
     signal: options.signal,
   });
 
@@ -292,13 +319,11 @@ export async function fetchCodexStandaloneSearch(
   const result: CodexWebSearchResult = {
     model: options.model,
     text,
-    searchCalls: [
-      {
-        status: "completed",
-        query: options.query,
-        actionType: "search_query",
-      },
-    ],
+    searchCalls: queries.map((query) => ({
+      status: "completed",
+      query,
+      actionType: "search_query",
+    })),
     citations: extractMarkdownCitations(text),
   };
   if (data.encrypted_output !== undefined) result.encryptedOutput = data.encrypted_output;
@@ -395,10 +420,16 @@ export async function fetchCodexWebSearch(
 async function formatCodexHttpError(prefix: string, response: Response): Promise<string> {
   const status = response.status;
   const body = await response.text();
-  if (isCloudflareError(response, body)) {
-    return `${prefix} failed: HTTP ${status}. Cloudflare blocked the request and returned an HTML challenge/error page instead of a Codex response. Set searchApi=responses to use the previous /codex/responses path, then retry.`;
+  const htmlTitle = extractHtmlPageTitle(response, body);
+  if (htmlTitle !== undefined) {
+    if (isCloudflareError(response, body)) {
+      return `${prefix} failed: HTTP ${status}. HTML page title: ${htmlTitle}. Cloudflare blocked the request and returned an HTML challenge/error page instead of a Codex response. Set searchApi=responses to use the /codex/responses path, then retry.`;
+    }
+    return `${prefix} failed: HTTP ${status}. HTML page title: ${htmlTitle}.`;
   }
-  return `${prefix} failed: HTTP ${status} ${body}`;
+
+  const text = body.trim();
+  return text ? `${prefix} failed: HTTP ${status}: ${text}` : `${prefix} failed: HTTP ${status}.`;
 }
 
 function isOpenAiRootBaseUrl(baseUrl: string): boolean {
@@ -410,15 +441,39 @@ function isOpenAiRootBaseUrl(baseUrl: string): boolean {
   }
 }
 
-function isCloudflareError(response: Response, body: string): boolean {
+function extractHtmlPageTitle(response: Response, body: string): string | undefined {
+  if (!isHtmlResponse(response, body)) return undefined;
+  const match = body.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title>/i);
+  const title = match
+    ? decodeBasicHtmlEntities(match[1] ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+    : "";
+  return title || "(no title)";
+}
+
+function isHtmlResponse(response: Response, body: string): boolean {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const lowerBody = body.slice(0, 4096).toLowerCase();
-  const isHtml =
-    contentType.includes("text/html") || /^\s*<!doctype html|^\s*<html/.test(lowerBody);
-  if (!isHtml) return false;
-  return /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked/.test(
+  const prefix = body.slice(0, 1024).toLowerCase();
+  return contentType.includes("text/html") || /^\s*(?:<!doctype html|<html[\s>])/.test(prefix);
+}
+
+function isCloudflareError(response: Response, body: string): boolean {
+  if (!isHtmlResponse(response, body)) return false;
+  const lowerBody = body.slice(0, 65536).toLowerCase();
+  return /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked|challenge-platform/.test(
     lowerBody,
   );
+}
+
+function decodeBasicHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function buildCodexHeaders(token: string, accountId: string, accept: string): Headers {
@@ -435,7 +490,12 @@ function buildCodexHeaders(token: string, accountId: string, accept: string): He
   return headers;
 }
 
-function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchOptions) {
+function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchBatchOptions) {
+  const commands: Record<string, unknown> = {
+    search_query: options.queries.map((query) => ({ q: query })),
+  };
+  if (options.queries.length > 3) commands.response_length = "medium";
+
   return {
     id: options.sessionId ?? "pi-codex-search",
     model: options.model,
@@ -443,12 +503,10 @@ function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchOptions)
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: options.query }],
+        content: [{ type: "input_text", text: options.queries.join("\n") }],
       },
     ],
-    commands: {
-      search_query: [{ q: options.query }],
-    },
+    commands,
     settings: {
       search_context_size: options.searchContextSize ?? "medium",
       allowed_callers: ["direct"],

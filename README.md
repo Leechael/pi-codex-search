@@ -24,8 +24,8 @@ This extension is for Pi workflows that need fresh or source-backed information:
 ## What this package adds
 
 - A `codex_search` Pi tool.
-- 1–5 search queries per call, run in parallel.
-- Responses API by default, with the standalone `/alpha/search` path still available.
+- 1–5 search queries per call. The default Responses API runs them in parallel; the experimental standalone API batches them into one `/alpha/search` request.
+- Responses API by default, with the experimental standalone `/alpha/search` path still available for opt-in testing.
 - `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
@@ -93,7 +93,7 @@ Example call:
 
 Arguments:
 
-- `queries` — required array of 1–5 search questions. Queries run in parallel; results are grouped by query.
+- `queries` — required array of 1–5 search questions. With the default Responses API, queries run in parallel and results are grouped by query. With the experimental standalone API, queries are batched into one backend request.
 - `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
 - `freshness` — optional, `live`, `indexed`, or `cached`; defaults to `live`.
 
@@ -166,7 +166,7 @@ Full schema, all fields optional:
 
 `toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
 
-`searchApi` chooses the backend path. `standalone` posts search commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases. `responses` keeps the previous `/codex/responses` hosted web-search flow.
+`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts search commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, batches multi-query calls into one request, and may be blocked by Cloudflare or backend session limits.
 
 Environment variable equivalents:
 

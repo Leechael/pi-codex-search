@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { formatStatus } from "../src/command.ts";
 import {
   CONFIG_FILE_NAME,
   DEFAULT_BATCH_SIZE,
@@ -246,6 +247,21 @@ describe("config loader", () => {
     await writeFile(join(cwd, ".pi", CONFIG_FILE_NAME), JSON.stringify({ batchSize: 10 }), "utf-8");
     const resolved = await loadConfig(cwd);
     assert.equal(resolved.batchSize, 10);
+  });
+
+  it("formats status with max batch size and experimental standalone marker", async () => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ batchSize: 8, searchApi: "standalone" }),
+      "utf-8",
+    );
+
+    const status = formatStatus(await loadConfig(cwd), cwd);
+
+    assert.match(status, /searchApi\s+= standalone \(experimental\)/);
+    assert.match(status, /maxBatchSize\s+= 8/);
+    assert.doesNotMatch(status, /batchSize\s+=/);
   });
 
   it("reads batchSize from env", async () => {

@@ -13,7 +13,7 @@ import {
   type CodexSearchCall,
   extractAccountIdFromToken,
   fetchCodexModels,
-  fetchCodexStandaloneSearch,
+  fetchCodexStandaloneSearchBatch,
   fetchCodexWebSearch,
   selectDefaultModel,
   type SearchContextSize,
@@ -54,6 +54,7 @@ interface WebSearchDetails {
   freshness: Freshness;
   searchContextSize: SearchContextSize;
   queryCount: number;
+  queries: string[];
   failedQueryCount: number;
   successes: QuerySuccess[];
   failures: QueryFailure[];
@@ -73,6 +74,7 @@ function buildTool(config: ResolvedConfig) {
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
       `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+      "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
     parameters: Type.Object({
@@ -134,6 +136,7 @@ function buildTool(config: ResolvedConfig) {
             freshness,
             searchContextSize,
             queryCount: total,
+            queries,
             failedQueryCount: 0,
             successes: [],
             failures: [],
@@ -145,6 +148,66 @@ function buildTool(config: ResolvedConfig) {
       };
 
       if (total > 1) emitPartial(formatProgress(completed, total));
+
+      if (config.searchApi === "standalone") {
+        try {
+          const result = await runStandaloneSearchBatch({
+            queries,
+            token,
+            accountId,
+            model,
+            freshness,
+            searchContextSize,
+            config,
+            signal,
+          });
+          completed = total;
+          if (total > 1) emitPartial(formatProgress(completed, total));
+
+          const successes: QuerySuccess[] = [
+            {
+              query: formatBatchQuery(queries),
+              text: result.text,
+              citations: result.citations,
+              searchCalls: result.searchCalls,
+            },
+          ];
+          if (result.responseId !== undefined) successes[0].responseId = result.responseId;
+          if (result.usage !== undefined) successes[0].usage = result.usage;
+
+          return {
+            content: [{ type: "text", text: formatToolText(successes, []) }],
+            details: {
+              model,
+              api: config.searchApi,
+              freshness,
+              searchContextSize,
+              queryCount: total,
+              queries,
+              failedQueryCount: 0,
+              successes,
+              failures: [],
+            } satisfies WebSearchDetails,
+          };
+        } catch (error) {
+          const kind = classifyError(error);
+          const message = error instanceof Error ? error.message : String(error);
+          const failures = queries.map((query) => ({ query, kind, message }));
+          const summary =
+            failures.length === 1
+              ? message
+              : `All ${failures.length} ${config.toolName} queries failed: ${failures
+                  .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
+                  .join("; ")}`;
+          const err = new Error(summary) as Error & {
+            kind?: CodexErrorKind;
+            failures?: QueryFailure[];
+          };
+          err.kind = kind;
+          err.failures = failures;
+          throw err;
+        }
+      }
 
       const settled = await Promise.allSettled(
         queries.map(async (query) => {
@@ -222,6 +285,7 @@ function buildTool(config: ResolvedConfig) {
           freshness,
           searchContextSize,
           queryCount: total,
+          queries,
           failedQueryCount: failures.length,
           successes,
           failures,
@@ -235,13 +299,16 @@ function buildTool(config: ResolvedConfig) {
       const ctxSize =
         (args.search_context_size as string | undefined) ?? config.defaultSearchContextSize;
 
-      let text = theme.fg("toolTitle", theme.bold(`${config.toolName} `));
+      let text = theme.fg("toolTitle", theme.bold(config.toolName));
       if (queries.length === 1) {
-        text += theme.fg("accent", formatInline(queries[0] ?? "", 90));
+        text += ` ${theme.fg("accent", formatInline(queries[0] ?? "", 90))}`;
       } else {
-        text += theme.fg("accent", `${queries.length} queries`);
+        text += ` ${theme.fg("accent", `${queries.length} queries`)}`;
       }
       text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
+      if (queries.length > 1) {
+        text += `\n${renderCallQueries(queries, theme)}`;
+      }
       return new Text(text, 0, 0);
     },
 
@@ -365,20 +432,6 @@ async function runCodexSearch(options: {
   signal: AbortSignal | undefined;
   onTextDelta: ((delta: string) => void) | undefined;
 }) {
-  if (options.config.searchApi === "standalone") {
-    const fetchOpts: Parameters<typeof fetchCodexStandaloneSearch>[0] = {
-      query: options.query,
-      token: options.token,
-      accountId: options.accountId,
-      model: options.model,
-      externalWebAccess: standaloneExternalWebAccess(options.freshness),
-      searchContextSize: options.searchContextSize,
-    };
-    if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
-    if (options.signal) fetchOpts.signal = options.signal;
-    return await fetchCodexStandaloneSearch(fetchOpts);
-  }
-
   const fetchOpts: Parameters<typeof fetchCodexWebSearch>[0] = {
     query: options.query,
     token: options.token,
@@ -392,6 +445,29 @@ async function runCodexSearch(options: {
   if (options.signal) fetchOpts.signal = options.signal;
   if (options.onTextDelta) fetchOpts.onTextDelta = options.onTextDelta;
   return await fetchCodexWebSearch(fetchOpts);
+}
+
+async function runStandaloneSearchBatch(options: {
+  queries: string[];
+  token: string;
+  accountId: string;
+  model: string;
+  freshness: Freshness;
+  searchContextSize: SearchContextSize;
+  config: ResolvedConfig;
+  signal: AbortSignal | undefined;
+}) {
+  const fetchOpts: Parameters<typeof fetchCodexStandaloneSearchBatch>[0] = {
+    queries: options.queries,
+    token: options.token,
+    accountId: options.accountId,
+    model: options.model,
+    externalWebAccess: standaloneExternalWebAccess(options.freshness),
+    searchContextSize: options.searchContextSize,
+  };
+  if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
+  if (options.signal) fetchOpts.signal = options.signal;
+  return await fetchCodexStandaloneSearchBatch(fetchOpts);
 }
 
 function standaloneExternalWebAccess(freshness: Freshness): StandaloneExternalWebAccess {
@@ -444,16 +520,47 @@ function renderPartial(details: WebSearchDetails | undefined, theme: Theme): str
 }
 
 function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string {
-  const firstSuccess = details.successes[0];
-  if (firstSuccess) {
-    const snippet = formatInline(firstSuccess.text, 110);
-    if (snippet) return theme.fg("dim", snippet);
-  }
+  const lines: string[] = [];
+  const queriesPreview = renderQueriesPreview(details.queries, theme);
+  if (queriesPreview) lines.push(queriesPreview);
+
   const firstFailure = details.failures[0];
   if (firstFailure) {
-    return theme.fg("dim", formatInline(firstFailure.message, 110));
+    lines.push(theme.fg("dim", formatInline(firstFailure.message, 110)));
   }
-  return "";
+  return lines.join("\n");
+}
+
+function renderQueriesPreview(queries: string[], theme: Theme): string {
+  if (queries.length === 0) return "";
+  if (queries.length === 1) {
+    return theme.fg("accent", `Query: ${formatInline(queries[0], 120)}`);
+  }
+  return [theme.fg("accent", "Queries:"), renderCallQueries(queries, theme)].join("\n");
+}
+
+function renderCallQueries(queries: unknown[], theme: Theme): string {
+  const iconPrefix = "  ⌕";
+  return formatQueryPreviewLines(queries)
+    .map(
+      (line) =>
+        `${theme.fg("accent", iconPrefix)}${theme.fg("dim", line.slice(iconPrefix.length))}`,
+    )
+    .join("\n");
+}
+
+export function formatQueryPreviewLines(queries: unknown[], maxLength = 110): string[] {
+  return queries.map((query, index) => `  ⌕ ${index + 1}. ${formatInline(query, maxLength)}`);
+}
+
+function formatQueriesInline(queries: unknown[]): string {
+  return `${queries.length} queries: ${queries
+    .map((query, index) => `${index + 1}. ${formatInline(query, 70)}`)
+    .join("; ")}`;
+}
+
+function formatBatchQuery(queries: string[]): string {
+  return queries.length === 1 ? (queries[0] ?? "") : formatQueriesInline(queries);
 }
 
 function formatInline(value: unknown, maxLength = 90): string {
