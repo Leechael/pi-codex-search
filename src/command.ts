@@ -73,7 +73,7 @@ const CYCLE_FIELDS: CycleField[] = [
   {
     id: "searchApi",
     label: "Search API",
-    description: "responses (stable) or standalone (experimental) backend",
+    description: "responses (default, stable) or standalone (experimental) backend",
     values: [defaultTag(DEFAULT_SEARCH_API), "standalone"],
     get: (c) =>
       c.searchApi === undefined || c.searchApi === DEFAULT_SEARCH_API
@@ -484,7 +484,9 @@ function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(`  clientVersion       = ${resolved.clientVersion ?? "(default)"}`);
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);
-  lines.push(`  searchApi           = ${resolved.searchApi}`);
+  lines.push(
+    `  searchApi           = ${resolved.searchApi}${resolved.searchApi === "standalone" ? " (experimental)" : ""}`,
+  );
   lines.push(`  batchSize           = ${resolved.batchSize}`);
   lines.push("");
   lines.push("Sources (env > project > home):");

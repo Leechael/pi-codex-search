@@ -6,6 +6,7 @@ import {
   extractAccountIdFromToken,
   fetchCodexModels,
   fetchCodexStandaloneSearch,
+  fetchCodexStandaloneSearchBatch,
   fetchCodexWebSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
@@ -141,6 +142,52 @@ describe("codex helpers", () => {
     assert.deepEqual(result.citations, [
       { title: "OpenAI", url: "https://openai.com", startIndex: 19 },
     ]);
+  });
+
+  it("batches standalone queries into one /alpha/search request", async () => {
+    let requestedBody: unknown;
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          output: "Batch result",
+        }),
+      );
+    };
+
+    const result = await fetchCodexStandaloneSearchBatch({
+      queries: ["OpenAI news", "Codex release notes"],
+      token: "token",
+      accountId: "account",
+      model: "gpt-test",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.deepEqual(requestedBody, {
+      id: "pi-codex-search",
+      model: "gpt-test",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "OpenAI news\nCodex release notes" }],
+        },
+      ],
+      commands: {
+        search_query: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
+      },
+      settings: {
+        search_context_size: "medium",
+        allowed_callers: ["direct"],
+        external_web_access: true,
+      },
+    });
+    assert.equal(result.text, "Batch result");
+    assert.deepEqual(
+      result.searchCalls.map((call) => call.query),
+      ["OpenAI news", "Codex release notes"],
+    );
   });
 
   it("returns a concise Cloudflare error for standalone search 403", async () => {

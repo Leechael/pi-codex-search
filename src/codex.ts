@@ -72,6 +72,19 @@ export interface CodexStandaloneSearchOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface CodexStandaloneSearchBatchOptions {
+  queries: string[];
+  token: string;
+  accountId: string;
+  model: string;
+  baseUrl?: string;
+  externalWebAccess?: StandaloneExternalWebAccess;
+  searchContextSize?: SearchContextSize;
+  sessionId?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
 export interface CodexCitation {
   title?: string;
   url: string;
@@ -267,6 +280,20 @@ export function selectDefaultModel(models: CodexModel[]): string | undefined {
 export async function fetchCodexStandaloneSearch(
   options: CodexStandaloneSearchOptions,
 ): Promise<CodexWebSearchResult> {
+  return await fetchCodexStandaloneSearchBatch({
+    ...options,
+    queries: [options.query],
+  });
+}
+
+export async function fetchCodexStandaloneSearchBatch(
+  options: CodexStandaloneSearchBatchOptions,
+): Promise<CodexWebSearchResult> {
+  const queries = options.queries.map((query) => query.trim()).filter((query) => query.length > 0);
+  if (queries.length === 0) {
+    throw new CodexError("schema", "Codex standalone search requires at least one query");
+  }
+
   const fetcher = options.fetchImpl ?? fetch;
   const headers = buildCodexHeaders(options.token, options.accountId, "application/json");
   headers.set("content-type", "application/json");
@@ -274,7 +301,7 @@ export async function fetchCodexStandaloneSearch(
   const response = await fetcher(resolveCodexSearchEndpoint(options.baseUrl), {
     method: "POST",
     headers,
-    body: JSON.stringify(buildStandaloneSearchRequestBody(options)),
+    body: JSON.stringify(buildStandaloneSearchRequestBody({ ...options, queries })),
     signal: options.signal,
   });
 
@@ -292,13 +319,11 @@ export async function fetchCodexStandaloneSearch(
   const result: CodexWebSearchResult = {
     model: options.model,
     text,
-    searchCalls: [
-      {
-        status: "completed",
-        query: options.query,
-        actionType: "search_query",
-      },
-    ],
+    searchCalls: queries.map((query) => ({
+      status: "completed",
+      query,
+      actionType: "search_query",
+    })),
     citations: extractMarkdownCitations(text),
   };
   if (data.encrypted_output !== undefined) result.encryptedOutput = data.encrypted_output;
@@ -465,7 +490,12 @@ function buildCodexHeaders(token: string, accountId: string, accept: string): He
   return headers;
 }
 
-function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchOptions) {
+function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchBatchOptions) {
+  const commands: Record<string, unknown> = {
+    search_query: options.queries.map((query) => ({ q: query })),
+  };
+  if (options.queries.length > 3) commands.response_length = "medium";
+
   return {
     id: options.sessionId ?? "pi-codex-search",
     model: options.model,
@@ -473,12 +503,10 @@ function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchOptions)
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: options.query }],
+        content: [{ type: "input_text", text: options.queries.join("\n") }],
       },
     ],
-    commands: {
-      search_query: [{ q: options.query }],
-    },
+    commands,
     settings: {
       search_context_size: options.searchContextSize ?? "medium",
       allowed_callers: ["direct"],

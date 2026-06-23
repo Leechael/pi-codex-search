@@ -13,7 +13,7 @@ import {
   type CodexSearchCall,
   extractAccountIdFromToken,
   fetchCodexModels,
-  fetchCodexStandaloneSearch,
+  fetchCodexStandaloneSearchBatch,
   fetchCodexWebSearch,
   selectDefaultModel,
   type SearchContextSize,
@@ -147,6 +147,66 @@ function buildTool(config: ResolvedConfig) {
       };
 
       if (total > 1) emitPartial(formatProgress(completed, total));
+
+      if (config.searchApi === "standalone") {
+        try {
+          const result = await runStandaloneSearchBatch({
+            queries,
+            token,
+            accountId,
+            model,
+            freshness,
+            searchContextSize,
+            config,
+            signal,
+          });
+          completed = total;
+          if (total > 1) emitPartial(formatProgress(completed, total));
+
+          const successes: QuerySuccess[] = [
+            {
+              query: formatBatchQuery(queries),
+              text: result.text,
+              citations: result.citations,
+              searchCalls: result.searchCalls,
+            },
+          ];
+          if (result.responseId !== undefined) successes[0].responseId = result.responseId;
+          if (result.usage !== undefined) successes[0].usage = result.usage;
+
+          return {
+            content: [{ type: "text", text: formatToolText(successes, []) }],
+            details: {
+              model,
+              api: config.searchApi,
+              freshness,
+              searchContextSize,
+              queryCount: total,
+              queries,
+              failedQueryCount: 0,
+              successes,
+              failures: [],
+            } satisfies WebSearchDetails,
+          };
+        } catch (error) {
+          const kind = classifyError(error);
+          const message = error instanceof Error ? error.message : String(error);
+          const failures = queries.map((query) => ({ query, kind, message }));
+          const summary =
+            failures.length === 1
+              ? message
+              : `All ${failures.length} ${config.toolName} queries failed: ${failures
+                  .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
+                  .join("; ")}`;
+          const err = new Error(summary) as Error & {
+            kind?: CodexErrorKind;
+            failures?: QueryFailure[];
+          };
+          err.kind = kind;
+          err.failures = failures;
+          throw err;
+        }
+      }
 
       const settled = await Promise.allSettled(
         queries.map(async (query) => {
@@ -368,20 +428,6 @@ async function runCodexSearch(options: {
   signal: AbortSignal | undefined;
   onTextDelta: ((delta: string) => void) | undefined;
 }) {
-  if (options.config.searchApi === "standalone") {
-    const fetchOpts: Parameters<typeof fetchCodexStandaloneSearch>[0] = {
-      query: options.query,
-      token: options.token,
-      accountId: options.accountId,
-      model: options.model,
-      externalWebAccess: standaloneExternalWebAccess(options.freshness),
-      searchContextSize: options.searchContextSize,
-    };
-    if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
-    if (options.signal) fetchOpts.signal = options.signal;
-    return await fetchCodexStandaloneSearch(fetchOpts);
-  }
-
   const fetchOpts: Parameters<typeof fetchCodexWebSearch>[0] = {
     query: options.query,
     token: options.token,
@@ -395,6 +441,29 @@ async function runCodexSearch(options: {
   if (options.signal) fetchOpts.signal = options.signal;
   if (options.onTextDelta) fetchOpts.onTextDelta = options.onTextDelta;
   return await fetchCodexWebSearch(fetchOpts);
+}
+
+async function runStandaloneSearchBatch(options: {
+  queries: string[];
+  token: string;
+  accountId: string;
+  model: string;
+  freshness: Freshness;
+  searchContextSize: SearchContextSize;
+  config: ResolvedConfig;
+  signal: AbortSignal | undefined;
+}) {
+  const fetchOpts: Parameters<typeof fetchCodexStandaloneSearchBatch>[0] = {
+    queries: options.queries,
+    token: options.token,
+    accountId: options.accountId,
+    model: options.model,
+    externalWebAccess: standaloneExternalWebAccess(options.freshness),
+    searchContextSize: options.searchContextSize,
+  };
+  if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
+  if (options.signal) fetchOpts.signal = options.signal;
+  return await fetchCodexStandaloneSearchBatch(fetchOpts);
 }
 
 function standaloneExternalWebAccess(freshness: Freshness): StandaloneExternalWebAccess {
@@ -480,6 +549,10 @@ function formatQueriesInline(queries: unknown[]): string {
   return `${queries.length} queries: ${queries
     .map((query, index) => `${index + 1}. ${formatInline(query, 70)}`)
     .join("; ")}`;
+}
+
+function formatBatchQuery(queries: string[]): string {
+  return queries.length === 1 ? (queries[0] ?? "") : formatQueriesInline(queries);
 }
 
 function formatInline(value: unknown, maxLength = 90): string {
