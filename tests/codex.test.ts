@@ -19,6 +19,7 @@ import {
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
   selectDefaultModel,
+  type StandaloneCommandsOptions,
 } from "../src/codex.ts";
 import { formatQueryPreviewLines } from "../index.ts";
 
@@ -75,6 +76,7 @@ describe("codex helpers", () => {
     const headers = transport.buildHeaders("application/json");
 
     assert.equal(headers.get("originator"), "codex_cli_rs");
+    assert.equal(headers.get("openai-beta"), "responses=experimental");
     assert.equal(headers.get("authorization"), "Bearer token");
     assert.equal(headers.get("chatgpt-account-id"), "account");
     assert.match(headers.get("user-agent") ?? "", /^codex_cli_rs\/0\.143\.0 /);
@@ -259,145 +261,145 @@ describe("codex helpers", () => {
     ]);
   });
 
-  it("posts standalone web content and lookup commands", async () => {
-    let requestedBody = {} as { commands?: Record<string, unknown> };
-    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
-      requestedBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ output: "Lookup result turn0fetch0" }));
-    };
-
-    const transport = createTransport({
-      token: "token",
-      accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
-      fetchImpl: fetchImpl as typeof fetch,
-    });
-
-    const result = await runStandaloneCommands({
-      model: "gpt-test",
-      transport,
-      sessionId: "pi-codex-search",
-      open: [{ refId: "https://example.com/docs" }],
-      find: [{ refId: "https://example.com/docs", pattern: "install" }],
-      click: [{ refId: "https://example.com/docs", id: 7 }],
-      screenshot: [{ refId: "https://example.com/docs", pageno: 1 }],
-      finance: [{ ticker: "AMD", type: "equity", market: "USA" }],
-      weather: [{ location: "San Francisco, CA" }],
-      sports: [
-        {
-          fn: "schedule",
-          league: "nba",
-          team: "GSW",
-          date_from: "2026-01-01",
-          date_to: "2026-01-31",
-          num_games: 3,
-        },
-      ],
-      time: [{ utc_offset: "+03:00" }],
-      imageQuery: [{ q: "waterfalls" }],
-      freshness: "live",
-    });
-
-    assert.deepEqual(requestedBody.commands?.open, [{ ref_id: "https://example.com/docs" }]);
-    assert.deepEqual(requestedBody.commands?.find, [
-      { ref_id: "https://example.com/docs", pattern: "install" },
-    ]);
-    assert.deepEqual(requestedBody.commands?.click, [
-      { ref_id: "https://example.com/docs", id: 7 },
-    ]);
-    assert.deepEqual(requestedBody.commands?.screenshot, [
-      { ref_id: "https://example.com/docs", pageno: 1 },
-    ]);
-    assert.deepEqual(requestedBody.commands?.finance, [
-      { ticker: "AMD", type: "equity", market: "USA" },
-    ]);
-    assert.deepEqual(requestedBody.commands?.weather, [{ location: "San Francisco, CA" }]);
-    assert.deepEqual(requestedBody.commands?.sports, [
+  it("posts standalone web content and lookup commands one action per request", async () => {
+    const cases: Array<{
+      options: Partial<StandaloneCommandsOptions>;
+      expectedCommands: Record<string, unknown>;
+      expectedCall?: { actionType?: string; refId?: string; query?: string };
+    }> = [
       {
-        fn: "schedule",
-        league: "nba",
-        team: "GSW",
-        date_from: "2026-01-01",
-        date_to: "2026-01-31",
-        num_games: 3,
+        options: { open: [{ refId: "https://example.com/docs" }] },
+        expectedCommands: { open: [{ ref_id: "https://example.com/docs" }] },
+        expectedCall: { actionType: "open_page", refId: "https://example.com/docs" },
       },
-    ]);
-    assert.deepEqual(requestedBody.commands?.time, [{ utc_offset: "+03:00" }]);
-    assert.deepEqual(requestedBody.commands?.image_query, [{ q: "waterfalls" }]);
-    assert.deepEqual(result.refIds, { turn0fetch0: "turn0fetch0" });
-    assert.deepEqual(
-      result.searchCalls
-        .filter((call) =>
-          ["open_page", "find_in_page", "click", "screenshot"].includes(call.actionType ?? ""),
-        )
-        .map((call) => ({ actionType: call.actionType, refId: call.refId, url: call.url })),
-      [
-        { actionType: "open_page", refId: "https://example.com/docs", url: undefined },
-        { actionType: "find_in_page", refId: "https://example.com/docs", url: undefined },
-        { actionType: "click", refId: "https://example.com/docs", url: undefined },
-        { actionType: "screenshot", refId: "https://example.com/docs", url: undefined },
-      ],
-    );
+      {
+        options: { find: [{ refId: "https://example.com/docs", pattern: "install" }] },
+        expectedCommands: {
+          find: [{ ref_id: "https://example.com/docs", pattern: "install" }],
+        },
+        expectedCall: { actionType: "find_in_page", refId: "https://example.com/docs" },
+      },
+      {
+        options: { click: [{ refId: "https://example.com/docs", id: 7 }] },
+        expectedCommands: { click: [{ ref_id: "https://example.com/docs", id: 7 }] },
+        expectedCall: { actionType: "click", refId: "https://example.com/docs" },
+      },
+      {
+        options: { screenshot: [{ refId: "https://example.com/docs", pageno: 1 }] },
+        expectedCommands: {
+          screenshot: [{ ref_id: "https://example.com/docs", pageno: 1 }],
+        },
+        expectedCall: { actionType: "screenshot", refId: "https://example.com/docs" },
+      },
+      {
+        options: { finance: [{ ticker: "AMD", type: "equity", market: "USA" }] },
+        expectedCommands: { finance: [{ ticker: "AMD", type: "equity", market: "USA" }] },
+        expectedCall: { actionType: "finance", query: "AMD" },
+      },
+      {
+        options: { weather: [{ location: "San Francisco, CA" }] },
+        expectedCommands: { weather: [{ location: "San Francisco, CA" }] },
+        expectedCall: { actionType: "weather", query: "San Francisco, CA" },
+      },
+      {
+        options: {
+          sports: [
+            {
+              fn: "schedule",
+              league: "nba",
+              team: "GSW",
+              date_from: "2026-01-01",
+              date_to: "2026-01-31",
+              num_games: 3,
+            },
+          ],
+        },
+        expectedCommands: {
+          sports: [
+            {
+              fn: "schedule",
+              league: "nba",
+              team: "GSW",
+              date_from: "2026-01-01",
+              date_to: "2026-01-31",
+              num_games: 3,
+            },
+          ],
+        },
+        expectedCall: { actionType: "sports", query: "schedule nba" },
+      },
+      {
+        options: { time: [{ utc_offset: "+03:00" }] },
+        expectedCommands: { time: [{ utc_offset: "+03:00" }] },
+        expectedCall: { actionType: "time", query: "+03:00" },
+      },
+      {
+        options: { imageQuery: [{ q: "waterfalls" }] },
+        expectedCommands: { image_query: [{ q: "waterfalls" }] },
+        expectedCall: { actionType: "image_query", query: "waterfalls" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      let requestedBody = {} as { commands?: Record<string, unknown> };
+      const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ output: "Lookup result turn0fetch0" }));
+      };
+
+      const transport = createTransport({
+        token: "token",
+        accountId: "account",
+        baseUrl: "https://example.test/backend/codex",
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+
+      const result = await runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        freshness: "live",
+        ...testCase.options,
+      });
+
+      assert.deepEqual(requestedBody.commands, testCase.expectedCommands);
+      if (testCase.expectedCall) {
+        const call = result.searchCalls[0];
+        assert.equal(call?.actionType, testCase.expectedCall.actionType);
+        if (testCase.expectedCall.refId !== undefined) {
+          assert.equal(call?.refId, testCase.expectedCall.refId);
+        }
+        if (testCase.expectedCall.query !== undefined) {
+          assert.equal(call?.query, testCase.expectedCall.query);
+        }
+      }
+    }
   });
 
-  it("batches standalone queries into one /alpha/search request", async () => {
-    let requestedBody: unknown;
-    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
-      requestedBody = JSON.parse(String(init?.body));
-      return new Response(
-        JSON.stringify({
-          output: "Batch result",
-        }),
-      );
-    };
-
+  it("rejects standalone action batching", async () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
       baseUrl: "https://example.test/backend/codex",
-      fetchImpl: fetchImpl as typeof fetch,
     });
 
-    const result = await runStandaloneCommands({
-      model: "gpt-test",
-      transport,
-      sessionId: "pi-codex-search",
-      searchQuery: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
-      freshness: "live",
-    });
-
-    assert.deepEqual(requestedBody, {
-      id: "pi-codex-search",
-      model: "gpt-test",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "OpenAI news\nCodex release notes" }],
-        },
-      ],
-      commands: {
-        search_query: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
-      },
-      settings: {
-        search_context_size: "medium",
-        allowed_callers: ["direct"],
-        external_web_access: true,
-      },
-      max_output_tokens: 8000,
-    });
-    assert.equal(result.text, "Batch result");
-    assert.deepEqual(
-      result.searchCalls.map((call) => call.query),
-      ["OpenAI news", "Codex release notes"],
+    await assert.rejects(
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
+        freshness: "live",
+      }),
+      /one per request/,
     );
   });
 
-  it("sets response_length for standalone batches above three queries", async () => {
+  it("sets response_length for standalone single requests when requested", async () => {
     let requestedBody = {} as { commands?: { response_length?: string } };
     const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
       requestedBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ output: "Batch result" }));
+      return new Response(JSON.stringify({ output: "Result" }));
     };
 
     const transport = createTransport({
@@ -411,7 +413,7 @@ describe("codex helpers", () => {
       model: "gpt-test",
       transport,
       sessionId: "pi-codex-search",
-      searchQuery: [{ q: "q1" }, { q: "q2" }, { q: "q3" }, { q: "q4" }],
+      searchQuery: [{ q: "q1" }],
       freshness: "live",
       responseLength: "medium",
     });

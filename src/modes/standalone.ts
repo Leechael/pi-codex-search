@@ -107,17 +107,21 @@ export function externalWebAccessForFreshness(freshness: Freshness): StandaloneE
 }
 
 export function hasAnyCommand(options: StandaloneCommandsOptions): boolean {
+  return countCommands(options) > 0;
+}
+
+function countCommands(options: StandaloneCommandsOptions): number {
   return (
-    (options.searchQuery?.length ?? 0) > 0 ||
-    (options.imageQuery?.length ?? 0) > 0 ||
-    (options.open?.length ?? 0) > 0 ||
-    (options.find?.length ?? 0) > 0 ||
-    (options.click?.length ?? 0) > 0 ||
-    (options.screenshot?.length ?? 0) > 0 ||
-    (options.finance?.length ?? 0) > 0 ||
-    (options.weather?.length ?? 0) > 0 ||
-    (options.sports?.length ?? 0) > 0 ||
-    (options.time?.length ?? 0) > 0
+    (options.searchQuery?.length ?? 0) +
+    (options.imageQuery?.length ?? 0) +
+    (options.open?.length ?? 0) +
+    (options.find?.length ?? 0) +
+    (options.click?.length ?? 0) +
+    (options.screenshot?.length ?? 0) +
+    (options.finance?.length ?? 0) +
+    (options.weather?.length ?? 0) +
+    (options.sports?.length ?? 0) +
+    (options.time?.length ?? 0)
   );
 }
 
@@ -126,6 +130,9 @@ export async function runStandaloneCommands(
 ): Promise<CodexWebSearchResult> {
   if (!hasAnyCommand(options)) {
     throw new Error("Codex standalone commands require at least one command");
+  }
+  if (countCommands(options) > 1) {
+    throw new Error("Codex standalone actions must be sent one per request");
   }
 
   const {

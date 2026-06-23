@@ -20,10 +20,6 @@ import {
   type CodexCitation,
   type CodexErrorKind,
   type CodexSearchCall,
-  type ClickCommand,
-  type FindCommand,
-  type OpenCommand,
-  type ScreenshotCommand,
   type SearchContextSize,
   type StandaloneCommandsOptions,
 } from "./src/codex.ts";
@@ -49,6 +45,12 @@ interface QueryFailure {
   query: string;
   kind: CodexErrorKind;
   message: string;
+}
+
+interface StandaloneCallPlan {
+  query: string;
+  options: StandaloneCommandsOptions;
+  openedUrl?: string;
 }
 
 interface WebSearchFailureDetail {
@@ -106,7 +108,8 @@ const StandaloneParametersSchema = Type.Object({
     Type.Array(Type.String({ minLength: 1 }), {
       minItems: 1,
       maxItems: 4,
-      description: "One or more search queries to run in parallel (max 4 in standalone mode).",
+      description:
+        "One or more search queries. Standalone mode sends each query as a separate Codex request.",
     }),
   ),
   search_context_size: Type.Optional(
@@ -234,7 +237,9 @@ function buildTool(config: ResolvedConfig) {
     promptSnippet: `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
-      `Batch up to ${config.searchApi === "standalone" ? 4 : config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+      config.searchApi === "standalone"
+        ? "Standalone mode sends each search/web action serially as a separate Codex request; do not batch standalone actions into one backend call."
+        : `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
       "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
@@ -252,19 +257,6 @@ function buildTool(config: ResolvedConfig) {
       const weatherCommands = params.weather ?? [];
       const sportsCommands = params.sports ?? [];
       const timeCommands = params.time?.map((c) => ({ utc_offset: c.utc_offset })) ?? [];
-      const requestLabels = buildRequestLabels({
-        queries,
-        imageQueries,
-        urls,
-        findCommands,
-        clickCommands,
-        screenshotCommands,
-        financeCommands,
-        weatherCommands,
-        sportsCommands,
-        timeCommands,
-      });
-
       if (
         queries.length === 0 &&
         imageQueries.length === 0 &&
@@ -340,78 +332,124 @@ function buildTool(config: ResolvedConfig) {
           }),
         );
 
-        const openCommands: OpenCommand[] = resolvedUrls.map((u) => ({ refId: u.refId }));
-        const findCmds: FindCommand[] = resolvedFind.map((c) => ({
-          refId: c.refId,
-          pattern: c.pattern,
-        }));
-        const clickCmds: ClickCommand[] = resolvedClick.map((c) => ({
-          refId: c.refId,
-          id: c.id,
-        }));
-        const screenshotCmds: ScreenshotCommand[] = resolvedScreenshot.map((c) => ({
-          refId: c.refId,
-          pageno: c.pageno,
-        }));
-
-        const options: StandaloneCommandsOptions = {
+        const baseStandaloneOptions = {
           model,
           transport,
           sessionId: ctx.sessionManager.getSessionId(),
-          searchQuery: queries.map((q) => ({ q })),
-          imageQuery: imageQueries.map((q) => ({ q })),
-          open: openCommands,
-          find: findCmds,
-          click: clickCmds,
-          screenshot: screenshotCmds,
-          finance: financeCommands,
-          weather: weatherCommands,
-          sports: sportsCommands,
-          time: timeCommands,
           freshness,
           searchContextSize,
-          responseLength: queries.length > 3 ? "medium" : undefined,
           maxOutputTokens: 8000,
           signal,
         };
+        const standaloneCalls: StandaloneCallPlan[] = [
+          ...queries.map((q) => ({
+            query: q,
+            options: { ...baseStandaloneOptions, searchQuery: [{ q }] },
+          })),
+          ...imageQueries.map((q) => ({
+            query: `image: ${q}`,
+            options: { ...baseStandaloneOptions, imageQuery: [{ q }] },
+          })),
+          ...resolvedUrls.map((u) => ({
+            query: `open: ${u.url}`,
+            openedUrl: u.url,
+            options: { ...baseStandaloneOptions, open: [{ refId: u.refId }] },
+          })),
+          ...resolvedFind.map((c) => ({
+            query: `find "${c.pattern}" in ${c.url}`,
+            options: { ...baseStandaloneOptions, find: [{ refId: c.refId, pattern: c.pattern }] },
+          })),
+          ...resolvedClick.map((c) => ({
+            query: `click ${c.id} in ${c.url}`,
+            options: { ...baseStandaloneOptions, click: [{ refId: c.refId, id: c.id }] },
+          })),
+          ...resolvedScreenshot.map((c) => ({
+            query: `screenshot ${c.pageno} of ${c.url}`,
+            options: {
+              ...baseStandaloneOptions,
+              screenshot: [{ refId: c.refId, pageno: c.pageno }],
+            },
+          })),
+          ...financeCommands.map((c) => ({
+            query: `finance: ${c.ticker}`,
+            options: { ...baseStandaloneOptions, finance: [c] },
+          })),
+          ...weatherCommands.map((c) => ({
+            query: `weather: ${c.location}`,
+            options: { ...baseStandaloneOptions, weather: [c] },
+          })),
+          ...sportsCommands.map((c) => ({
+            query: `sports: ${c.fn} ${c.league}${c.team ? ` ${c.team}` : ""}`,
+            options: { ...baseStandaloneOptions, sports: [c] },
+          })),
+          ...timeCommands.map((c) => ({
+            query: `time: ${c.utc_offset}`,
+            options: { ...baseStandaloneOptions, time: [c] },
+          })),
+        ];
 
-        try {
-          const result = await runStandaloneCommands(options);
+        const total = standaloneCalls.length;
+        let completed = 0;
+        const emitPartial = (partialText: string) => {
+          onUpdate?.({
+            content: [{ type: "text", text: partialText }],
+            details: buildDetails(config, model, freshness, searchContextSize, [], [], {
+              partial: true,
+              completed,
+              total,
+            }),
+          });
+        };
+        if (total > 1) emitPartial(formatProgress(completed, total));
 
-          const fetchRefIds = Object.keys(result.refIds ?? {}).filter((refId) =>
-            /\bturn\d+fetch\d+\b/.test(refId),
-          );
-          for (const [index, resolvedUrl] of resolvedUrls.entries()) {
-            const refId = fetchRefIds[index];
-            if (refId) await refStore.remember(resolvedUrl.url, refId);
+        const successes: QuerySuccess[] = [];
+        const failures: QueryFailure[] = [];
+        for (const call of standaloneCalls) {
+          try {
+            const result = await runStandaloneCommands(call.options);
+            if (call.openedUrl) {
+              const refId = Object.keys(result.refIds ?? {}).find((candidate) =>
+                /\bturn\d+fetch\d+\b/.test(candidate),
+              );
+              if (refId) await refStore.remember(call.openedUrl, refId);
+            }
+            const success: QuerySuccess = {
+              query: call.query,
+              text: result.text,
+              citations: result.citations,
+              searchCalls: result.searchCalls,
+            };
+            if (result.usage) success.usage = result.usage;
+            successes.push(success);
+          } catch (error) {
+            const kind = classifyError(error);
+            const message = error instanceof Error ? error.message : String(error);
+            failures.push({ query: call.query, kind, message });
+          } finally {
+            completed += 1;
+            if (total > 1) emitPartial(formatProgress(completed, total));
           }
+        }
 
-          const success: QuerySuccess = {
-            query: formatBatchQuery(requestLabels),
-            text: result.text,
-            citations: result.citations,
-            searchCalls: result.searchCalls,
-          };
-          if (result.usage) success.usage = result.usage;
-
-          return {
-            content: [{ type: "text", text: formatToolText([success], []) }],
-            details: buildDetails(config, model, freshness, searchContextSize, [success], []),
-          };
-        } catch (error) {
-          const kind = classifyError(error);
-          const message = error instanceof Error ? error.message : String(error);
-          const failure: QueryFailure = {
-            query: formatBatchQuery(requestLabels),
-            kind,
-            message,
-          };
-          const err = new CodexError(kind, message) as CodexError & {
+        if (successes.length === 0) {
+          const primary = failures[0];
+          const summary =
+            failures.length === 1
+              ? (primary?.message ?? "Codex standalone request failed")
+              : `All ${failures.length} ${config.toolName} standalone actions failed: ${failures
+                  .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
+                  .join("; ")}`;
+          const err = new CodexError(primary?.kind ?? "unknown", summary) as CodexError & {
             failures?: QueryFailure[];
           };
-          err.failures = [failure];
+          err.failures = failures;
           throw err;
         }
+
+        return {
+          content: [{ type: "text", text: formatToolText(successes, failures) }],
+          details: buildDetails(config, model, freshness, searchContextSize, successes, failures),
+        };
       }
 
       // Responses API path: only search queries are supported.
@@ -868,16 +906,6 @@ function isTimeArg(value: unknown): value is { utc_offset: string } {
     value !== null &&
     typeof (value as { utc_offset?: unknown }).utc_offset === "string"
   );
-}
-
-function formatQueriesInline(queries: unknown[]): string {
-  return `${queries.length} queries: ${queries
-    .map((query, index) => `${index + 1}. ${formatInline(query, 70)}`)
-    .join("; ")}`;
-}
-
-function formatBatchQuery(items: string[]): string {
-  return items.length === 1 ? (items[0] ?? "") : formatQueriesInline(items);
 }
 
 function formatInline(value: unknown, maxLength = 90): string {

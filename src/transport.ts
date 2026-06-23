@@ -93,6 +93,7 @@ export function createTransport(options: TransportOptions): CodexTransport {
       headers.set("Authorization", `Bearer ${options.token}`);
       headers.set("chatgpt-account-id", options.accountId);
       headers.set("originator", getCodexOriginator());
+      headers.set("OpenAI-Beta", "responses=experimental");
       headers.set("accept", accept);
       if (accept === "text/event-stream") {
         headers.set("content-type", "application/json");

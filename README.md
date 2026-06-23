@@ -18,14 +18,14 @@ This extension is for Pi workflows that need fresh or source-backed information:
 - **Look up current docs and release notes.** Ask the model to check things that changed after its training cutoff.
 - **Get sources with the answer.** Search results include citations when Codex returns them.
 - **Reuse your Codex login.** The tool uses Pi's existing `openai-codex` OAuth credential instead of asking you to paste tokens.
-- **Batch related searches.** One tool call can run related queries together. Responses mode runs up to five in parallel; standalone mode sends up to four commands in one Codex web run.
+- **Batch related searches in Responses mode.** One tool call can run related queries together. Standalone mode sends each action as its own Codex request because `/alpha/search` rejects multi-action batching.
 - **Keep projects in control.** Rename the tool, change defaults, or disable it per project.
 
 ## What this package adds
 
 - A `codex_search` Pi tool.
 - 1–5 search queries per call in the default Responses API.
-- Experimental standalone `/alpha/search` mode with search, image search, open, find, click, screenshot, finance, weather, sports, and time commands.
+- Experimental standalone `/alpha/search` mode with search, image search, open, find, click, screenshot, finance, weather, sports, and time commands, sent serially as one action per backend request.
 - `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
@@ -99,7 +99,7 @@ Arguments in default `responses` mode:
 
 Extra arguments in experimental `standalone` mode:
 
-- `queries` — optional array of 1–4 search questions.
+- `queries` — optional array of 1–4 search questions. Each query is sent serially as a separate standalone request.
 - `urls` — pages to open/fetch directly.
 - `find` — `{ "url", "pattern" }` objects for in-page text search.
 - `click` — `{ "url", "id" }` objects for following link ids from an opened page.
@@ -176,7 +176,7 @@ Full schema, all fields optional:
 
 `toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
 
-`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, batches multi-command calls into one request, stores returned ref ids for follow-up open/find/click/screenshot actions, and may be blocked by Cloudflare or backend session limits.
+`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, sends each search/web action serially as a separate request, stores returned ref ids for follow-up open/find/click/screenshot actions, and may be blocked by Cloudflare or backend session limits.
 
 Environment variable equivalents:
 
