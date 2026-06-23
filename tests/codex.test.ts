@@ -12,6 +12,7 @@ import {
   createTransport,
   ChatGptCloudflareCookieStore,
   createRefStore,
+  wrapFetchWithCookies,
   runStandaloneCommands,
   runResponsesSearch,
   normalizeCodexBaseUrl,
@@ -62,9 +63,11 @@ describe("codex helpers", () => {
   });
 
   it("formats Codex user agent architecture like upstream", () => {
-    if (process.arch === "arm64") {
-      assert.match(buildCodexUserAgent(), /; arm64\)/);
-    }
+    const expectedArch = process.arch === "x64" ? "x86_64" : process.arch;
+    assert.match(
+      buildCodexUserAgent(),
+      new RegExp(`; ${expectedArch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`),
+    );
   });
 
   it("builds Codex-aligned transport headers", () => {
@@ -75,6 +78,23 @@ describe("codex helpers", () => {
     assert.equal(headers.get("authorization"), "Bearer token");
     assert.equal(headers.get("chatgpt-account-id"), "account");
     assert.match(headers.get("user-agent") ?? "", /^codex_cli_rs\/0\.143\.0 /);
+  });
+
+  it("preserves Request headers when wrapping fetch with cookies", async () => {
+    let observedHeaders = new Headers();
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      observedHeaders = new Headers(init?.headers);
+      return new Response("ok");
+    };
+    const wrapped = wrapFetchWithCookies(fetchImpl);
+    const request = new Request("https://example.test/", {
+      headers: { "x-from-request": "request" },
+    });
+
+    await wrapped(request, { headers: { "x-from-init": "init" } });
+
+    assert.equal(observedHeaders.get("x-from-request"), "request");
+    assert.equal(observedHeaders.get("x-from-init"), "init");
   });
 
   it("stores only Cloudflare cookies for ChatGPT hosts", () => {
@@ -90,6 +110,10 @@ describe("codex helpers", () => {
     );
 
     assert.equal(store.cookiesForUrl(url), "cf_clearance=clearance");
+    assert.equal(
+      store.cookiesForUrl(new URL("https://foo.chatgpt.com/backend-api/codex/responses")),
+      undefined,
+    );
     assert.equal(store.cookiesForUrl(new URL("https://api.openai.com/v1/responses")), undefined);
   });
 
@@ -103,6 +127,26 @@ describe("codex helpers", () => {
       const second = createRefStore();
       await second.load(dir);
       assert.equal(second.resolveRefId("https://example.com/docs"), "turn0fetch0");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges concurrent ref id persistence", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-codex-refs-race-"));
+    try {
+      const first = createRefStore();
+      const second = createRefStore();
+      await Promise.all([first.load(dir), second.load(dir)]);
+      await Promise.all([
+        first.remember("https://example.com/a", "turn0fetch0"),
+        second.remember("https://example.com/b", "turn0fetch1"),
+      ]);
+
+      const reloaded = createRefStore();
+      await reloaded.load(dir);
+      assert.equal(reloaded.resolveRefId("https://example.com/a"), "turn0fetch0");
+      assert.equal(reloaded.resolveRefId("https://example.com/b"), "turn0fetch1");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -281,6 +325,19 @@ describe("codex helpers", () => {
     assert.deepEqual(requestedBody.commands?.time, [{ utc_offset: "+03:00" }]);
     assert.deepEqual(requestedBody.commands?.image_query, [{ q: "waterfalls" }]);
     assert.deepEqual(result.refIds, { turn0fetch0: "turn0fetch0" });
+    assert.deepEqual(
+      result.searchCalls
+        .filter((call) =>
+          ["open_page", "find_in_page", "click", "screenshot"].includes(call.actionType ?? ""),
+        )
+        .map((call) => ({ actionType: call.actionType, refId: call.refId, url: call.url })),
+      [
+        { actionType: "open_page", refId: "https://example.com/docs", url: undefined },
+        { actionType: "find_in_page", refId: "https://example.com/docs", url: undefined },
+        { actionType: "click", refId: "https://example.com/docs", url: undefined },
+        { actionType: "screenshot", refId: "https://example.com/docs", url: undefined },
+      ],
+    );
   });
 
   it("batches standalone queries into one /alpha/search request", async () => {

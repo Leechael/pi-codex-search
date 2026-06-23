@@ -12,6 +12,7 @@ interface StoredRefs {
 }
 
 const STORE_FILE = "pi-codex-search-refs.json";
+const PERSIST_QUEUES = new Map<string, Promise<void>>();
 
 export function createRefStore(): RefStore {
   const urlToRefId = new Map<string, string>();
@@ -25,7 +26,7 @@ export function createRefStore(): RefStore {
     async remember(url: string, refId: string): Promise<void> {
       urlToRefId.set(url, refId);
       if (sessionDir) {
-        await persist(sessionDir, urlToRefId);
+        await enqueuePersist(sessionDir, urlToRefId);
       }
     },
 
@@ -50,7 +51,24 @@ async function loadStored(dir: string): Promise<StoredRefs> {
   }
 }
 
-async function persist(dir: string, map: Map<string, string>): Promise<void> {
-  const stored: StoredRefs = { urlToRefId: Object.fromEntries(map) };
+async function enqueuePersist(dir: string, map: Map<string, string>): Promise<void> {
+  const previous = PERSIST_QUEUES.get(dir) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => persistMerged(dir, map));
+  PERSIST_QUEUES.set(dir, next);
+  try {
+    await next;
+  } finally {
+    if (PERSIST_QUEUES.get(dir) === next) PERSIST_QUEUES.delete(dir);
+  }
+}
+
+async function persistMerged(dir: string, map: Map<string, string>): Promise<void> {
+  const current = await loadStored(dir);
+  const stored: StoredRefs = {
+    urlToRefId: {
+      ...current.urlToRefId,
+      ...Object.fromEntries(map),
+    },
+  };
   await writeFile(join(dir, STORE_FILE), JSON.stringify(stored, null, 2), "utf-8");
 }

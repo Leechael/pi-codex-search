@@ -83,7 +83,7 @@ export class ChatGptCloudflareCookieStore {
     if (!isAllowedHost(url.hostname)) return undefined;
     const parts: string[] = [];
     for (const cookie of this.cookies.values()) {
-      if (cookie.domain === url.hostname || url.hostname.endsWith(cookie.domain)) {
+      if (cookie.domain === url.hostname) {
         parts.push(`${cookie.name}=${cookie.value}`);
       }
     }
@@ -103,7 +103,8 @@ export function wrapFetchWithCookies(fetchImpl: FetchLike): FetchLike {
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
     );
     const cookieHeader = SHARED_STORE.cookiesForUrl(url);
-    const headers = new Headers(init?.headers);
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
     if (cookieHeader) {
       const existing = headers.get("cookie");
       headers.set("cookie", existing ? `${existing}; ${cookieHeader}` : cookieHeader);

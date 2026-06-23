@@ -166,10 +166,12 @@ export async function runResponsesSearch(
 
     if (event.type === "response.output_item.added" && data.item?.type === "web_search_call") {
       const item = data.item;
-      searchCalls.set(item.id ?? `search-${searchCalls.size + 1}`, {
-        id: item.id,
-        status: item.status,
-      });
+      if (item.id) {
+        searchCalls.set(item.id, {
+          id: item.id,
+          status: item.status,
+        });
+      }
       continue;
     }
 
@@ -210,19 +212,28 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEv
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  let doneReading = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        doneReading = true;
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
 
-    let separator = findSseSeparator(buffer);
-    while (separator) {
-      const frame = buffer.slice(0, separator.index);
-      buffer = buffer.slice(separator.index + separator.length);
-      const event = parseSseFrame(frame);
-      if (event) yield event;
-      separator = findSseSeparator(buffer);
+      let separator = findSseSeparator(buffer);
+      while (separator) {
+        const frame = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator.length);
+        const event = parseSseFrame(frame);
+        if (event) yield event;
+        separator = findSseSeparator(buffer);
+      }
     }
+  } finally {
+    if (!doneReading) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 
   buffer += decoder.decode();

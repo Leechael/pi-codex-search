@@ -80,24 +80,26 @@ function buildToolDescription(config: ResolvedConfig): string {
   return `${toolName}: search the web using the configured ChatGPT Codex subscription. Web content lookup requires switching searchApi to "standalone" in settings.`;
 }
 
-const SearchParametersSchema = Type.Object({
-  queries: Type.Array(Type.String({ minLength: 1 }), {
-    minItems: 1,
-    maxItems: 5,
-    description: "One or more search queries to run in parallel (max 5).",
-  }),
-  search_context_size: Type.Optional(
-    StringEnum(["low", "medium", "high"] as const, {
-      description: "Amount of web context to retrieve. Defaults to medium.",
+function buildSearchParametersSchema(config: ResolvedConfig) {
+  return Type.Object({
+    queries: Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: config.batchSize,
+      description: `One or more search queries to run in parallel (max ${config.batchSize}).`,
     }),
-  ),
-  freshness: Type.Optional(
-    StringEnum(["cached", "indexed", "live"] as const, {
-      description:
-        "Use 'live' for time-sensitive queries; 'indexed' for OpenAI-indexed web access; 'cached' for stable topics. Defaults to live.",
-    }),
-  ),
-});
+    search_context_size: Type.Optional(
+      StringEnum(["low", "medium", "high"] as const, {
+        description: "Amount of web context to retrieve. Defaults to medium.",
+      }),
+    ),
+    freshness: Type.Optional(
+      StringEnum(["cached", "indexed", "live"] as const, {
+        description:
+          "Use 'live' for time-sensitive queries; 'indexed' for OpenAI-indexed web access; 'cached' for stable topics. Defaults to live.",
+      }),
+    ),
+  });
+}
 
 const StandaloneParametersSchema = Type.Object({
   queries: Type.Optional(
@@ -219,7 +221,9 @@ type ToolParameters = Partial<StandaloneParameters> & {
 };
 
 function buildToolParameters(config: ResolvedConfig) {
-  return config.searchApi === "standalone" ? StandaloneParametersSchema : SearchParametersSchema;
+  return config.searchApi === "standalone"
+    ? StandaloneParametersSchema
+    : buildSearchParametersSchema(config);
 }
 
 function buildTool(config: ResolvedConfig) {

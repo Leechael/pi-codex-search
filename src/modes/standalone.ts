@@ -260,10 +260,16 @@ function inferSearchCalls(options: StandaloneCommandsOptions): CodexSearchCall[]
     calls.push({ status: "completed", query: q.q, actionType: "image_query" }),
   );
   options.open?.forEach((c) =>
-    calls.push({ status: "completed", url: c.refId, actionType: "open_page" }),
+    calls.push({ status: "completed", refId: c.refId, actionType: "open_page" }),
   );
   options.find?.forEach((c) =>
-    calls.push({ status: "completed", url: c.refId, actionType: "find_in_page" }),
+    calls.push({ status: "completed", refId: c.refId, actionType: "find_in_page" }),
+  );
+  options.click?.forEach((c) =>
+    calls.push({ status: "completed", refId: c.refId, actionType: "click" }),
+  );
+  options.screenshot?.forEach((c) =>
+    calls.push({ status: "completed", refId: c.refId, actionType: "screenshot" }),
   );
   options.finance?.forEach((c) =>
     calls.push({ status: "completed", query: `${c.ticker}`, actionType: "finance" }),
