@@ -12,6 +12,7 @@ export interface ResponsesSearchOptions {
   model: string;
   transport: CodexTransport;
   externalWebAccess: boolean;
+  indexGatedWebAccess?: true;
   searchContextSize?: SearchContextSize;
   sessionId?: string;
   threadId?: string;
@@ -80,6 +81,7 @@ export async function runResponsesSearch(
     query,
     model,
     externalWebAccess,
+    indexGatedWebAccess,
     searchContextSize,
     sessionId,
     threadId,
@@ -98,6 +100,10 @@ export async function runResponsesSearch(
     external_web_access: externalWebAccess,
     search_context_size: searchContextSize ?? "medium",
   };
+  if (indexGatedWebAccess) {
+    webSearchTool.index_gated_web_access = true;
+  }
+
   const response = await transport.fetch(transport.resolveEndpoint("responses"), {
     method: "POST",
     headers,

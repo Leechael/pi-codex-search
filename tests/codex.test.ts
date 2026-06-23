@@ -404,6 +404,33 @@ describe("codex helpers", () => {
     assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, undefined);
   });
 
+  it("sends index_gated_web_access=true only for indexed /codex/responses", async () => {
+    let requestedBody = {} as { tools?: Array<Record<string, unknown>> };
+    const sse =
+      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n';
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    };
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await runResponsesSearch({
+      query: "q",
+      model: "m",
+      transport,
+      externalWebAccess: true,
+      indexGatedWebAccess: true,
+    });
+
+    assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, true);
+  });
+
   it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {
     const fetchImpl = async () =>
       new Response("too many", { status: 429, statusText: "Too Many Requests" });
