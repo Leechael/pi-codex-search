@@ -20,8 +20,10 @@ import {
   type CodexCitation,
   type CodexErrorKind,
   type CodexSearchCall,
+  type ClickCommand,
   type FindCommand,
   type OpenCommand,
+  type ScreenshotCommand,
   type SearchContextSize,
   type StandaloneCommandsOptions,
 } from "./src/codex.ts";
@@ -130,6 +132,24 @@ const StandaloneParametersSchema = Type.Object({
       { description: "Find a pattern within a webpage." },
     ),
   ),
+  click: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String({ minLength: 1 }),
+        id: Type.Number(),
+      }),
+      { description: "Follow a link id from a previously opened page." },
+    ),
+  ),
+  screenshot: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String({ minLength: 1 }),
+        pageno: Type.Number(),
+      }),
+      { description: "Capture a screenshot of a previously opened page." },
+    ),
+  ),
   finance: Type.Optional(
     Type.Array(
       Type.Object({
@@ -212,6 +232,8 @@ function buildTool(config: ResolvedConfig) {
         params.image_queries?.map((q) => q.trim()).filter((q) => q.length > 0) ?? [];
       const urls = params.urls?.map((u) => u.trim()).filter((u) => u.length > 0) ?? [];
       const findCommands = params.find?.filter((c) => c.url.trim() && c.pattern.trim()) ?? [];
+      const clickCommands = params.click?.filter((c) => c.url.trim()) ?? [];
+      const screenshotCommands = params.screenshot?.filter((c) => c.url.trim()) ?? [];
       const financeCommands = params.finance ?? [];
       const weatherCommands = params.weather ?? [];
       const sportsCommands = params.sports ?? [];
@@ -221,6 +243,8 @@ function buildTool(config: ResolvedConfig) {
         imageQueries,
         urls,
         findCommands,
+        clickCommands,
+        screenshotCommands,
         financeCommands,
         weatherCommands,
         sportsCommands,
@@ -232,6 +256,8 @@ function buildTool(config: ResolvedConfig) {
         imageQueries.length === 0 &&
         urls.length === 0 &&
         findCommands.length === 0 &&
+        clickCommands.length === 0 &&
+        screenshotCommands.length === 0 &&
         financeCommands.length === 0 &&
         weatherCommands.length === 0 &&
         sportsCommands.length === 0 &&
@@ -287,11 +313,31 @@ function buildTool(config: ResolvedConfig) {
             return { url: c.url, refId, pattern: c.pattern };
           }),
         );
+        const resolvedClick = await Promise.all(
+          clickCommands.map(async (c: { url: string; id: number }) => {
+            const refId = refStore.resolveRefId(c.url) ?? c.url;
+            return { url: c.url, refId, id: c.id };
+          }),
+        );
+        const resolvedScreenshot = await Promise.all(
+          screenshotCommands.map(async (c: { url: string; pageno: number }) => {
+            const refId = refStore.resolveRefId(c.url) ?? c.url;
+            return { url: c.url, refId, pageno: c.pageno };
+          }),
+        );
 
         const openCommands: OpenCommand[] = resolvedUrls.map((u) => ({ refId: u.refId }));
         const findCmds: FindCommand[] = resolvedFind.map((c) => ({
           refId: c.refId,
           pattern: c.pattern,
+        }));
+        const clickCmds: ClickCommand[] = resolvedClick.map((c) => ({
+          refId: c.refId,
+          id: c.id,
+        }));
+        const screenshotCmds: ScreenshotCommand[] = resolvedScreenshot.map((c) => ({
+          refId: c.refId,
+          pageno: c.pageno,
         }));
 
         const options: StandaloneCommandsOptions = {
@@ -302,6 +348,8 @@ function buildTool(config: ResolvedConfig) {
           imageQuery: imageQueries.map((q) => ({ q })),
           open: openCommands,
           find: findCmds,
+          click: clickCmds,
+          screenshot: screenshotCmds,
           finance: financeCommands,
           weather: weatherCommands,
           sports: sportsCommands,
@@ -354,6 +402,8 @@ function buildTool(config: ResolvedConfig) {
       if (
         urls.length > 0 ||
         findCommands.length > 0 ||
+        clickCommands.length > 0 ||
+        screenshotCommands.length > 0 ||
         imageQueries.length > 0 ||
         financeCommands.length > 0 ||
         weatherCommands.length > 0 ||
@@ -688,6 +738,8 @@ function buildRequestLabels(input: {
   imageQueries: string[];
   urls: string[];
   findCommands: Array<{ url: string; pattern: string }>;
+  clickCommands: Array<{ url: string; id: number }>;
+  screenshotCommands: Array<{ url: string; pageno: number }>;
   financeCommands: Array<{ ticker: string }>;
   weatherCommands: Array<{ location: string }>;
   sportsCommands: Array<{ fn: string; league: string; team?: string }>;
@@ -698,6 +750,8 @@ function buildRequestLabels(input: {
     ...input.imageQueries.map((q) => `image: ${q}`),
     ...input.urls.map((url) => `open: ${url}`),
     ...input.findCommands.map((c) => `find "${c.pattern}" in ${c.url}`),
+    ...input.clickCommands.map((c) => `click ${c.id} in ${c.url}`),
+    ...input.screenshotCommands.map((c) => `screenshot ${c.pageno} of ${c.url}`),
     ...input.financeCommands.map((c) => `finance: ${c.ticker}`),
     ...input.weatherCommands.map((c) => `weather: ${c.location}`),
     ...input.sportsCommands.map((c) => `sports: ${c.fn} ${c.league}${c.team ? ` ${c.team}` : ""}`),
@@ -712,6 +766,12 @@ function buildCallLabels(args: Record<string, unknown>): string[] {
     urls: Array.isArray(args.urls) ? args.urls.filter(isString) : [],
     findCommands: Array.isArray(args.find)
       ? args.find.filter(isFindArg).map((c) => ({ url: c.url, pattern: c.pattern }))
+      : [],
+    clickCommands: Array.isArray(args.click)
+      ? args.click.filter(isClickArg).map((c) => ({ url: c.url, id: c.id }))
+      : [],
+    screenshotCommands: Array.isArray(args.screenshot)
+      ? args.screenshot.filter(isScreenshotArg).map((c) => ({ url: c.url, pageno: c.pageno }))
       : [],
     financeCommands: Array.isArray(args.finance)
       ? args.finance.filter(isFinanceArg).map((c) => ({ ticker: c.ticker }))
@@ -738,6 +798,24 @@ function isFindArg(value: unknown): value is { url: string; pattern: string } {
     value !== null &&
     typeof (value as { url?: unknown }).url === "string" &&
     typeof (value as { pattern?: unknown }).pattern === "string"
+  );
+}
+
+function isClickArg(value: unknown): value is { url: string; id: number } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { url?: unknown }).url === "string" &&
+    typeof (value as { id?: unknown }).id === "number"
+  );
+}
+
+function isScreenshotArg(value: unknown): value is { url: string; pageno: number } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { url?: unknown }).url === "string" &&
+    typeof (value as { pageno?: unknown }).pageno === "number"
   );
 }
 

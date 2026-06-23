@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   classifyError,
@@ -7,6 +10,7 @@ import {
   fetchCodexModels,
   createTransport,
   ChatGptCloudflareCookieStore,
+  createRefStore,
   runStandaloneCommands,
   runResponsesSearch,
   normalizeCodexBaseUrl,
@@ -80,6 +84,21 @@ describe("codex helpers", () => {
 
     assert.equal(store.cookiesForUrl(url), "cf_clearance=clearance");
     assert.equal(store.cookiesForUrl(new URL("https://api.openai.com/v1/responses")), undefined);
+  });
+
+  it("persists standalone ref ids by URL", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-codex-refs-"));
+    try {
+      const first = createRefStore();
+      await first.load(dir);
+      await first.remember("https://example.com/docs", "turn0fetch0");
+
+      const second = createRefStore();
+      await second.load(dir);
+      assert.equal(second.resolveRefId("https://example.com/docs"), "turn0fetch0");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("extracts account id from an access token JWT", () => {
@@ -198,9 +217,20 @@ describe("codex helpers", () => {
       sessionId: "pi-codex-search",
       open: [{ refId: "https://example.com/docs" }],
       find: [{ refId: "https://example.com/docs", pattern: "install" }],
+      click: [{ refId: "https://example.com/docs", id: 7 }],
+      screenshot: [{ refId: "https://example.com/docs", pageno: 1 }],
       finance: [{ ticker: "AMD", type: "equity", market: "USA" }],
       weather: [{ location: "San Francisco, CA" }],
-      sports: [{ fn: "standings", league: "nba", team: "GSW" }],
+      sports: [
+        {
+          fn: "schedule",
+          league: "nba",
+          team: "GSW",
+          date_from: "2026-01-01",
+          date_to: "2026-01-31",
+          num_games: 3,
+        },
+      ],
       time: [{ utc_offset: "+03:00" }],
       imageQuery: [{ q: "waterfalls" }],
       freshness: "live",
@@ -210,12 +240,25 @@ describe("codex helpers", () => {
     assert.deepEqual(requestedBody.commands?.find, [
       { ref_id: "https://example.com/docs", pattern: "install" },
     ]);
+    assert.deepEqual(requestedBody.commands?.click, [
+      { ref_id: "https://example.com/docs", id: 7 },
+    ]);
+    assert.deepEqual(requestedBody.commands?.screenshot, [
+      { ref_id: "https://example.com/docs", pageno: 1 },
+    ]);
     assert.deepEqual(requestedBody.commands?.finance, [
       { ticker: "AMD", type: "equity", market: "USA" },
     ]);
     assert.deepEqual(requestedBody.commands?.weather, [{ location: "San Francisco, CA" }]);
     assert.deepEqual(requestedBody.commands?.sports, [
-      { fn: "standings", league: "nba", team: "GSW" },
+      {
+        fn: "schedule",
+        league: "nba",
+        team: "GSW",
+        date_from: "2026-01-01",
+        date_to: "2026-01-31",
+        num_games: 3,
+      },
     ]);
     assert.deepEqual(requestedBody.commands?.time, [{ utc_offset: "+03:00" }]);
     assert.deepEqual(requestedBody.commands?.image_query, [{ q: "waterfalls" }]);
@@ -359,7 +402,8 @@ describe("codex helpers", () => {
   });
 
   it("maps response.failed events to a kind based on the error message", async () => {
-    const sse = 'event: response.failed\ndata: {"error":{"message":"Rate limit exceeded"}}\n\n';
+    const sse =
+      'event: response.failed\r\ndata: {"error":{"message":"Rate limit exceeded"}}\r\n\r\n';
     const fetchImpl = async () =>
       new Response(sse, {
         status: 200,

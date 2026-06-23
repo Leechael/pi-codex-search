@@ -215,19 +215,24 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEv
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    let separatorIndex = buffer.indexOf("\n\n");
-    while (separatorIndex !== -1) {
-      const frame = buffer.slice(0, separatorIndex);
-      buffer = buffer.slice(separatorIndex + 2);
+    let separator = findSseSeparator(buffer);
+    while (separator) {
+      const frame = buffer.slice(0, separator.index);
+      buffer = buffer.slice(separator.index + separator.length);
       const event = parseSseFrame(frame);
       if (event) yield event;
-      separatorIndex = buffer.indexOf("\n\n");
+      separator = findSseSeparator(buffer);
     }
   }
 
   buffer += decoder.decode();
   const event = parseSseFrame(buffer);
   if (event) yield event;
+}
+
+function findSseSeparator(buffer: string): { index: number; length: number } | undefined {
+  const match = /\r?\n\r?\n/.exec(buffer);
+  return match?.index === undefined ? undefined : { index: match.index, length: match[0].length };
 }
 
 function parseSseFrame(frame: string): SseEvent | undefined {

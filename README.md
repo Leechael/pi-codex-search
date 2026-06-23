@@ -18,14 +18,14 @@ This extension is for Pi workflows that need fresh or source-backed information:
 - **Look up current docs and release notes.** Ask the model to check things that changed after its training cutoff.
 - **Get sources with the answer.** Search results include citations when Codex returns them.
 - **Reuse your Codex login.** The tool uses Pi's existing `openai-codex` OAuth credential instead of asking you to paste tokens.
-- **Batch related searches.** One tool call can run up to five related queries in parallel and return the results grouped by query.
+- **Batch related searches.** One tool call can run related queries together. Responses mode runs up to five in parallel; standalone mode sends up to four commands in one Codex web run.
 - **Keep projects in control.** Rename the tool, change defaults, or disable it per project.
 
 ## What this package adds
 
 - A `codex_search` Pi tool.
-- 1–5 search queries per call. The default Responses API runs them in parallel; the experimental standalone API batches them into one `/alpha/search` request.
-- Responses API by default, with the experimental standalone `/alpha/search` path still available for opt-in testing.
+- 1–5 search queries per call in the default Responses API.
+- Experimental standalone `/alpha/search` mode with search, image search, open, find, click, screenshot, finance, weather, sports, and time commands.
 - `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
@@ -91,11 +91,21 @@ Example call:
 }
 ```
 
-Arguments:
+Arguments in default `responses` mode:
 
-- `queries` — required array of 1–5 search questions. With the default Responses API, queries run in parallel and results are grouped by query. With the experimental standalone API, queries are batched into one backend request.
+- `queries` — required array of 1–5 search questions. Queries run in parallel and results are grouped by query.
 - `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
 - `freshness` — optional, `live`, `indexed`, or `cached`; defaults to `live`.
+
+Extra arguments in experimental `standalone` mode:
+
+- `queries` — optional array of 1–4 search questions.
+- `urls` — pages to open/fetch directly.
+- `find` — `{ "url", "pattern" }` objects for in-page text search.
+- `click` — `{ "url", "id" }` objects for following link ids from an opened page.
+- `screenshot` — `{ "url", "pageno" }` objects for page screenshots.
+- `image_queries` — image search queries.
+- `finance`, `weather`, `sports`, `time` — Codex web lookup commands.
 
 The tool returns text. When citations are available, the text includes a `Sources:` section.
 
@@ -166,7 +176,7 @@ Full schema, all fields optional:
 
 `toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
 
-`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts search commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, batches multi-query calls into one request, and may be blocked by Cloudflare or backend session limits.
+`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, batches multi-command calls into one request, stores returned ref ids for follow-up open/find/click/screenshot actions, and may be blocked by Cloudflare or backend session limits.
 
 Environment variable equivalents:
 

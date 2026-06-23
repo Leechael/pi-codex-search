@@ -53,9 +53,9 @@ export interface SportsCommand {
   league: string;
   team?: string;
   opponent?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  numGames?: number;
+  date_from?: string;
+  date_to?: string;
+  num_games?: number;
   locale?: string;
 }
 
@@ -162,9 +162,9 @@ export async function runStandaloneCommands(
       league: c.league,
       team: c.team,
       opponent: c.opponent,
-      date_from: c.dateFrom,
-      date_to: c.dateTo,
-      num_games: c.numGames,
+      date_from: c.date_from,
+      date_to: c.date_to,
+      num_games: c.num_games,
       locale: c.locale,
     }));
   }
