@@ -234,12 +234,18 @@ function buildTool(config: ResolvedConfig) {
     name: config.toolName,
     label: "Codex Search",
     description: buildToolDescription(config),
-    promptSnippet: `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
+    promptSnippet:
+      config.searchApi === "standalone"
+        ? `${config.toolName}: search the web, open/fetch webpages, find text in pages, follow page link ids, take screenshots, and look up finance/weather/sports/time using the configured ChatGPT Codex subscription.`
+        : `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
       config.searchApi === "standalone"
-        ? "Standalone mode sends each search/web action serially as a separate Codex request; do not batch standalone actions into one backend call."
+        ? "Standalone mode can search, open/fetch URLs, find text within opened pages, click link ids, take screenshots, and run finance/weather/sports/time lookups. Send each action serially as a separate Codex request; do not batch standalone actions into one backend call."
         : `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+      config.searchApi === "standalone"
+        ? "When the user asks to read or inspect a webpage, use urls/open plus follow-up find/click/screenshot actions instead of shelling out to curl."
+        : "Webpage open/fetch actions require searchApi=standalone; responses mode supports search queries only.",
       "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
