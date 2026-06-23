@@ -161,8 +161,8 @@ const TEXT_FIELDS: TextField[] = [
   },
   {
     id: "batchSize",
-    label: "Batch size",
-    description: `Max parallel queries per tool call (${MIN_BATCH_SIZE}-${MAX_BATCH_SIZE})`,
+    label: "Max batch size",
+    description: `Max queries per tool call (${MIN_BATCH_SIZE}-${MAX_BATCH_SIZE})`,
     defaultDisplay: String(DEFAULT_BATCH_SIZE),
     get: (c) => (c.batchSize === undefined ? undefined : String(c.batchSize)),
     apply: (c, v) => {
@@ -174,7 +174,7 @@ const TEXT_FIELDS: TextField[] = [
       const parsed = Number(trimmed);
       if (!Number.isInteger(parsed) || parsed < MIN_BATCH_SIZE || parsed > MAX_BATCH_SIZE) {
         throw new Error(
-          `Batch size must be an integer between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}.`,
+          `Max batch size must be an integer between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}.`,
         );
       }
       c.batchSize = parsed;
@@ -487,7 +487,7 @@ function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(
     `  searchApi           = ${resolved.searchApi}${resolved.searchApi === "standalone" ? " (experimental)" : ""}`,
   );
-  lines.push(`  batchSize           = ${resolved.batchSize}`);
+  lines.push(`  maxBatchSize        = ${resolved.batchSize}`);
   lines.push("");
   lines.push("Sources (env > project > home):");
   lines.push(`  env     = ${describeSource(resolved.sources.env)}`);
