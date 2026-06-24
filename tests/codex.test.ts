@@ -38,6 +38,14 @@ describe("codex helpers", () => {
       "https://chatgpt.com/backend-api/codex/responses",
     );
     assert.equal(
+      resolveCodexEndpoint("https://chatgpt.com/backend-api/proxy", "responses"),
+      "https://chatgpt.com/backend-api/proxy/codex/responses",
+    );
+    assert.equal(
+      resolveCodexEndpoint("https://chatgpt.com/backend-api-v2", "responses"),
+      "https://chatgpt.com/backend-api-v2/responses",
+    );
+    assert.equal(
       resolveCodexEndpoint("https://api.openai.com", "responses"),
       "https://api.openai.com/v1/responses",
     );
@@ -60,6 +68,14 @@ describe("codex helpers", () => {
     assert.equal(
       resolveCodexSearchEndpoint("https://chatgpt.com/backend-api"),
       "https://chatgpt.com/backend-api/codex/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api/proxy"),
+      "https://chatgpt.com/backend-api/proxy/codex/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api-v2"),
+      "https://chatgpt.com/backend-api-v2/alpha/search",
     );
     assert.equal(
       resolveCodexSearchEndpoint("https://api.openai.com"),

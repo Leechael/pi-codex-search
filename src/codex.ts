@@ -455,8 +455,7 @@ function resolveCodexBaseUrl(baseUrl: string | undefined): string {
 function isChatgptCodexBackend(baseUrl: string | undefined): boolean {
   try {
     const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_BASE_URL;
-    const url = new URL(raw.replace(/\/+$/, ""));
-    return url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api");
+    return looksLikeChatgptBackendUrl(raw.replace(/\/+$/, ""));
   } catch {
     return false;
   }
@@ -478,7 +477,10 @@ function stripKnownCodexEndpointSuffixes(value: string): string {
 function looksLikeChatgptBackendUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api");
+    return (
+      url.hostname === "chatgpt.com" &&
+      (url.pathname === "/backend-api" || url.pathname.startsWith("/backend-api/"))
+    );
   } catch {
     return false;
   }
