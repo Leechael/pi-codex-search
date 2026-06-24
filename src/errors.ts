@@ -26,9 +26,13 @@ export function classifyHttpStatus(status: number): CodexErrorKind {
   return "transport";
 }
 
-export function formatHttpErrorBody(text: string): string {
+export function formatHttpErrorBody(text: string, mode: "responses" | "standalone"): string {
   if (isCloudflareChallenge(text)) {
-    return 'Cloudflare challenge blocked the Codex request. Switch searchApi to "responses" or retry after Codex/ChatGPT has refreshed its Cloudflare clearance.';
+    const advice =
+      mode === "standalone"
+        ? 'Switch searchApi to "responses" or retry after Codex/ChatGPT has refreshed its Cloudflare clearance.'
+        : "Retry after Codex/ChatGPT has refreshed its Cloudflare clearance.";
+    return `Cloudflare challenge blocked the Codex request. ${advice}`;
   }
   return text;
 }

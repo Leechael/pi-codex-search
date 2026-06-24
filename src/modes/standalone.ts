@@ -232,7 +232,7 @@ export async function runStandaloneCommands(
 
   if (!response.ok) {
     const status = response.status;
-    const text = formatHttpErrorBody(await response.text());
+    const text = formatHttpErrorBody(await response.text(), "standalone");
     throw new CodexError(
       classifyHttpStatus(status),
       `Codex standalone search request failed: HTTP ${status}: ${text}`,

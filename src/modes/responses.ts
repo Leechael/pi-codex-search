@@ -131,7 +131,7 @@ export async function runResponsesSearch(
 
   if (!response.ok) {
     const status = response.status;
-    const text = formatHttpErrorBody(await response.text());
+    const text = formatHttpErrorBody(await response.text(), "responses");
     throw new CodexError(
       classifyHttpStatus(status),
       `Codex responses request failed: HTTP ${status}: ${text}`,
