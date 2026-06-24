@@ -148,10 +148,10 @@ export async function runStandaloneCommands(
   options: StandaloneCommandsOptions,
 ): Promise<CodexWebSearchResult> {
   if (!hasAnyCommand(options)) {
-    throw new Error("Codex standalone commands require at least one command");
+    throw new CodexError("schema", "Codex standalone commands require at least one command");
   }
   if (countCommands(options) > 1) {
-    throw new Error("Codex standalone actions must be sent one per request");
+    throw new CodexError("schema", "Codex standalone actions must be sent one per request");
   }
   assertSupportedStandaloneCombination(options.searchContextSize, options.freshness);
 
