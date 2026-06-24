@@ -51,6 +51,7 @@ export interface CodexWebSearchOptions {
   accountId: string;
   model: string;
   baseUrl?: string;
+  headerOptions?: CodexHeaderOptions;
   externalWebAccess?: boolean;
   indexGatedWebAccess?: boolean;
   searchContextSize?: SearchContextSize;
@@ -65,6 +66,7 @@ export interface CodexStandaloneSearchOptions {
   accountId: string;
   model: string;
   baseUrl?: string;
+  headerOptions?: CodexHeaderOptions;
   externalWebAccess?: StandaloneExternalWebAccess;
   searchContextSize?: SearchContextSize;
   sessionId?: string;
@@ -78,6 +80,7 @@ export interface CodexStandaloneSearchBatchOptions {
   accountId: string;
   model: string;
   baseUrl?: string;
+  headerOptions?: CodexHeaderOptions;
   externalWebAccess?: StandaloneExternalWebAccess;
   searchContextSize?: SearchContextSize;
   sessionId?: string;
@@ -172,42 +175,34 @@ interface StandaloneSearchResponse {
   output?: string;
 }
 
+export interface CodexHeaderOptions {
+  sendAuthorization?: boolean;
+  sendChatgptAccountId?: boolean;
+  sendChatgptHeaders?: boolean;
+  extraHeaders?: Record<string, string>;
+}
+
 const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api";
 const DEFAULT_CLIENT_VERSION = "1.0.0";
 const ACCOUNT_ID_CLAIM = "https://api.openai.com/auth";
 
 export function normalizeCodexBaseUrl(baseUrl: string | undefined): string {
   const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_BASE_URL;
-  const normalized = raw.replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses"))
-    return normalized.slice(0, -"/codex/responses".length);
-  if (normalized.endsWith("/codex")) return normalized.slice(0, -"/codex".length);
-  return normalized;
+  return stripKnownCodexEndpointSuffixes(raw.replace(/\/+$/, ""));
 }
 
 export function resolveCodexEndpoint(
   baseUrl: string | undefined,
-  path: "models" | "responses",
+  path: "models" | "responses" | "alpha/search",
 ): string {
-  return `${normalizeCodexBaseUrl(baseUrl)}/codex/${path}`;
+  const normalizedBase = resolveCodexBaseUrl(baseUrl);
+  return isChatgptCodexBackend(baseUrl)
+    ? `${normalizedBase}/codex/${path}`
+    : `${normalizedBase}/${path}`;
 }
 
 export function resolveCodexSearchEndpoint(baseUrl: string | undefined): string {
-  const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_BASE_URL;
-  let normalized = raw.replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses")) {
-    normalized = normalized.slice(0, -"/responses".length);
-  }
-  if (normalized.endsWith("/codex/models")) {
-    normalized = normalized.slice(0, -"/models".length);
-  }
-  if (normalized.endsWith("/codex/alpha/search") || normalized.endsWith("/alpha/search")) {
-    return normalized;
-  }
-  if (normalized.endsWith("/codex")) return `${normalized}/alpha/search`;
-  if (normalized.endsWith("/v1")) return `${normalized}/alpha/search`;
-  if (isOpenAiRootBaseUrl(normalized)) return `${normalized}/v1/alpha/search`;
-  return `${normalized}/codex/alpha/search`;
+  return resolveCodexEndpoint(baseUrl, "alpha/search");
 }
 
 export function extractAccountIdFromToken(token: string): string | undefined {
@@ -229,6 +224,7 @@ export async function fetchCodexModels(options: {
   token: string;
   accountId: string;
   baseUrl?: string;
+  headerOptions?: CodexHeaderOptions;
   clientVersion?: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -243,7 +239,7 @@ export async function fetchCodexModels(options: {
   );
 
   const response = await fetcher(endpoint.toString(), {
-    headers: buildCodexHeaders(options.token, options.accountId, "application/json"),
+    headers: buildCodexHeaders(options.token, options.accountId, "application/json", options.headerOptions),
     signal: options.signal,
   });
   if (!response.ok) {
@@ -295,7 +291,12 @@ export async function fetchCodexStandaloneSearchBatch(
   }
 
   const fetcher = options.fetchImpl ?? fetch;
-  const headers = buildCodexHeaders(options.token, options.accountId, "application/json");
+  const headers = buildCodexHeaders(
+    options.token,
+    options.accountId,
+    "application/json",
+    options.headerOptions,
+  );
   headers.set("content-type", "application/json");
 
   const response = await fetcher(resolveCodexSearchEndpoint(options.baseUrl), {
@@ -336,7 +337,12 @@ export async function fetchCodexWebSearch(
   const fetcher = options.fetchImpl ?? fetch;
   const response = await fetcher(resolveCodexEndpoint(options.baseUrl, "responses"), {
     method: "POST",
-    headers: buildCodexHeaders(options.token, options.accountId, "text/event-stream"),
+    headers: buildCodexHeaders(
+      options.token,
+      options.accountId,
+      "text/event-stream",
+      options.headerOptions,
+    ),
     body: JSON.stringify(buildWebSearchRequestBody(options)),
     signal: options.signal,
   });
@@ -441,6 +447,45 @@ function isOpenAiRootBaseUrl(baseUrl: string): boolean {
   }
 }
 
+function resolveCodexBaseUrl(baseUrl: string | undefined): string {
+  const normalized = normalizeCodexBaseUrl(baseUrl);
+  return isOpenAiRootBaseUrl(normalized) ? `${normalized}/v1` : normalized;
+}
+
+function isChatgptCodexBackend(baseUrl: string | undefined): boolean {
+  try {
+    const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_BASE_URL;
+    return looksLikeChatgptBackendUrl(raw.replace(/\/+$/, ""));
+  } catch {
+    return false;
+  }
+}
+
+function stripKnownCodexEndpointSuffixes(value: string): string {
+  if (looksLikeChatgptBackendUrl(value)) {
+    if (value.endsWith("/codex/responses")) return value.slice(0, -"/codex/responses".length);
+    if (value.endsWith("/codex/alpha/search")) return value.slice(0, -"/codex/alpha/search".length);
+    if (value.endsWith("/codex/models")) return value.slice(0, -"/codex/models".length);
+    if (value.endsWith("/codex")) return value.slice(0, -"/codex".length);
+  }
+  if (value.endsWith("/responses")) return value.slice(0, -"/responses".length);
+  if (value.endsWith("/alpha/search")) return value.slice(0, -"/alpha/search".length);
+  if (value.endsWith("/models")) return value.slice(0, -"/models".length);
+  return value;
+}
+
+function looksLikeChatgptBackendUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.hostname === "chatgpt.com" &&
+      (url.pathname === "/backend-api" || url.pathname.startsWith("/backend-api/"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function extractHtmlPageTitle(response: Response, body: string): string | undefined {
   if (!isHtmlResponse(response, body)) return undefined;
   const match = body.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title>/i);
@@ -476,17 +521,31 @@ function decodeBasicHtmlEntities(value: string): string {
     .replace(/&#39;/g, "'");
 }
 
-function buildCodexHeaders(token: string, accountId: string, accept: string): Headers {
+function buildCodexHeaders(
+  token: string,
+  accountId: string,
+  accept: string,
+  options: CodexHeaderOptions | undefined,
+): Headers {
   const headers = new Headers();
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("chatgpt-account-id", accountId);
-  headers.set("originator", "pi");
-  headers.set("OpenAI-Beta", "responses=experimental");
+  const sendAuthorization = options?.sendAuthorization ?? true;
+  const sendChatgptAccountId = options?.sendChatgptAccountId ?? true;
+  const sendChatgptHeaders = options?.sendChatgptHeaders ?? true;
+
+  if (sendAuthorization) headers.set("Authorization", `Bearer ${token}`);
+  if (sendChatgptAccountId) headers.set("chatgpt-account-id", accountId);
+  if (sendChatgptHeaders) {
+    headers.set("originator", "pi");
+    headers.set("OpenAI-Beta", "responses=experimental");
+  }
   headers.set("accept", accept);
   if (accept === "text/event-stream") {
     headers.set("content-type", "application/json");
   }
   headers.set("User-Agent", "pi-codex-search");
+  for (const [name, value] of Object.entries(options?.extraHeaders ?? {})) {
+    headers.set(name, value);
+  }
   return headers;
 }
 
