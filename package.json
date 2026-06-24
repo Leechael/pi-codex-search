@@ -63,6 +63,9 @@
     "@earendil-works/pi-coding-agent": "^0.79.10",
     "@earendil-works/pi-tui": "^0.79.10"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "pi": {
     "extensions": [
       "./index.ts"
