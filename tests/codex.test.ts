@@ -30,12 +30,32 @@ describe("codex helpers", () => {
 
   it("resolves codex endpoints", () => {
     assert.equal(
+      resolveCodexEndpoint(undefined, "responses"),
+      "https://chatgpt.com/backend-api/codex/responses",
+    );
+    assert.equal(
       resolveCodexEndpoint("https://chatgpt.com/backend-api/codex", "responses"),
       "https://chatgpt.com/backend-api/codex/responses",
     );
     assert.equal(
-      resolveCodexEndpoint("https://example.test/root", "models"),
-      "https://example.test/root/codex/models",
+      resolveCodexEndpoint("https://api.openai.com", "responses"),
+      "https://api.openai.com/v1/responses",
+    );
+    assert.equal(
+      resolveCodexEndpoint("https://api.openai.com/v1", "responses"),
+      "https://api.openai.com/v1/responses",
+    );
+    assert.equal(
+      resolveCodexEndpoint("http://localhost:11434/v1", "responses"),
+      "http://localhost:11434/v1/responses",
+    );
+    assert.equal(
+      resolveCodexEndpoint("http://localhost:11434/v1", "models"),
+      "http://localhost:11434/v1/models",
+    );
+    assert.equal(
+      resolveCodexEndpoint("https://proxy.example/openai", "responses"),
+      "https://proxy.example/openai/responses",
     );
     assert.equal(
       resolveCodexSearchEndpoint("https://chatgpt.com/backend-api"),
@@ -48,6 +68,14 @@ describe("codex helpers", () => {
     assert.equal(
       resolveCodexSearchEndpoint("https://api.openai.com/v1"),
       "https://api.openai.com/v1/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("http://localhost:11434/v1"),
+      "http://localhost:11434/v1/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://proxy.example/openai"),
+      "https://proxy.example/openai/alpha/search",
     );
     assert.equal(
       resolveCodexSearchEndpoint("https://chatgpt.com/backend-api/codex/responses"),
@@ -93,6 +121,76 @@ describe("codex helpers", () => {
         return true;
       },
     );
+  });
+
+  it("sends the existing default Codex headers when header options are omitted", async () => {
+    let requestedHeaders = new Headers();
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ models: [] }));
+    };
+
+    await fetchCodexModels({
+      token: "token",
+      accountId: "account",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedHeaders.get("Authorization"), "Bearer token");
+    assert.equal(requestedHeaders.get("chatgpt-account-id"), "account");
+    assert.equal(requestedHeaders.get("originator"), "pi");
+    assert.equal(requestedHeaders.get("OpenAI-Beta"), "responses=experimental");
+    assert.equal(requestedHeaders.get("accept"), "application/json");
+    assert.equal(requestedHeaders.get("User-Agent"), "pi-codex-search");
+  });
+
+  it("omits ChatGPT-specific headers when disabled", async () => {
+    let requestedHeaders = new Headers();
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ models: [] }));
+    };
+
+    await fetchCodexModels({
+      token: "token",
+      accountId: "account",
+      headerOptions: {
+        sendChatgptAccountId: false,
+        sendChatgptHeaders: false,
+      },
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedHeaders.get("Authorization"), "Bearer token");
+    assert.equal(requestedHeaders.get("chatgpt-account-id"), null);
+    assert.equal(requestedHeaders.get("originator"), null);
+    assert.equal(requestedHeaders.get("OpenAI-Beta"), null);
+  });
+
+  it("lets extra headers override defaults or add new values", async () => {
+    let requestedHeaders = new Headers();
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ models: [] }));
+    };
+
+    await fetchCodexModels({
+      token: "token",
+      accountId: "account",
+      headerOptions: {
+        sendAuthorization: false,
+        extraHeaders: {
+          Authorization: "Bearer override",
+          accept: "text/plain",
+          "x-trace-id": "trace-1",
+        },
+      },
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedHeaders.get("Authorization"), "Bearer override");
+    assert.equal(requestedHeaders.get("accept"), "text/plain");
+    assert.equal(requestedHeaders.get("x-trace-id"), "trace-1");
   });
 
   it("posts standalone search requests to /alpha/search", async () => {
