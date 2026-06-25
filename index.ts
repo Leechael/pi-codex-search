@@ -28,6 +28,7 @@ import { registerSettingsCommand } from "./src/command.ts";
 import {
   STANDALONE_TOOL_NAME,
   type Freshness,
+  isProjectTrustedContext,
   loadConfig,
   type ResolvedConfig,
 } from "./src/config.ts";
@@ -668,7 +669,7 @@ export default function codexWebSearchExtension(pi: ExtensionAPI) {
   registerSettingsCommand(pi);
 
   pi.on("session_start", async (_event, ctx) => {
-    const config = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
+    const config = await loadConfig(ctx.cwd, isProjectTrustedContext(ctx));
     if (!config.enabled) return;
 
     pi.registerTool(buildTool({ ...config, searchApi: "responses", toolName: "codex_search" }));

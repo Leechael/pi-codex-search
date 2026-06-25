@@ -19,6 +19,7 @@ import {
   STANDALONE_TOOL_NAME,
   deleteConfig,
   getConfigPath,
+  isProjectTrustedContext,
   loadConfig,
   MAX_BATCH_SIZE,
   MIN_BATCH_SIZE,
@@ -214,7 +215,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
         }
         if (trimmed === "reset") {
           if (ctx.hasUI) {
-            await openResetMenu(ctx, ctx.isProjectTrusted());
+            await openResetMenu(ctx, isProjectTrustedContext(ctx));
           } else {
             notify(
               ctx,
@@ -237,7 +238,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
 }
 
 async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
-  const isProjectTrusted = ctx.isProjectTrusted();
+  const isProjectTrusted = isProjectTrustedContext(ctx);
   const resolved = await loadConfig(ctx.cwd, isProjectTrusted);
   const drafts: Record<ConfigScope, PiCodexSearchConfig> = {
     project: { ...resolved.sources.project },
@@ -491,7 +492,7 @@ async function openResetMenu(
 }
 
 async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
-  const resolved = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
+  const resolved = await loadConfig(ctx.cwd, isProjectTrustedContext(ctx));
   notify(ctx, formatStatus(resolved, ctx.cwd));
 }
 

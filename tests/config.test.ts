@@ -14,6 +14,7 @@ import {
   DEFAULT_TOOL_NAME,
   deleteConfig,
   getConfigPath,
+  isProjectTrustedContext,
   loadConfig,
   saveConfig,
 } from "../src/config.ts";
@@ -58,6 +59,20 @@ describe("config loader", () => {
     }
     await rm(cwd, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
+  });
+
+  it("guards missing project trust context", () => {
+    assert.equal(isProjectTrustedContext({}), true);
+    assert.equal(isProjectTrustedContext({ isProjectTrusted: false }), false);
+    assert.equal(isProjectTrustedContext({ isProjectTrusted: () => false }), false);
+    assert.equal(
+      isProjectTrustedContext({
+        isProjectTrusted: () => {
+          throw new Error("not available");
+        },
+      }),
+      false,
+    );
   });
 
   it("returns defaults when no files or env are present", async () => {

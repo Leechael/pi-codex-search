@@ -61,6 +61,17 @@ export function getConfigPath(scope: ConfigScope, cwd: string): string {
   return join(homedir(), ".pi", CONFIG_FILE_NAME);
 }
 
+export function isProjectTrustedContext(ctx: unknown): boolean {
+  const maybe = ctx as { isProjectTrusted?: unknown };
+  if (typeof maybe.isProjectTrusted === "boolean") return maybe.isProjectTrusted;
+  if (typeof maybe.isProjectTrusted !== "function") return true;
+  try {
+    return Boolean(maybe.isProjectTrusted());
+  } catch {
+    return false;
+  }
+}
+
 export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<ResolvedConfig> {
   const homeConfig = await readConfigFile(getConfigPath("home", cwd));
   const projectConfig = isProjectTrusted
