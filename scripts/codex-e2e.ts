@@ -243,18 +243,6 @@ async function runStandaloneActionSuite(
 
   const actionCases: Array<{ name: string; options: StandaloneCommandsOptions }> = [
     {
-      name: "search_query",
-      options: standaloneOptions(runtime, freshness, context, {
-        searchQuery: [{ q: options.query }],
-      }),
-    },
-    {
-      name: "image_query",
-      options: standaloneOptions(runtime, freshness, context, {
-        imageQuery: [{ q: "OpenAI Codex logo" }],
-      }),
-    },
-    {
       name: "finance",
       options: standaloneOptions(runtime, freshness, context, {
         finance: [{ ticker: "AMD", type: "equity", market: "USA" }],
@@ -402,14 +390,14 @@ async function runStandaloneSessionSuite(
       standaloneOptions(runtime, freshness, context, {
         transport: isolatedTransport,
         sessionId: firstSession,
-        searchQuery: [{ q: `${options.query} isolated A` }],
+        time: [{ utc_offset: "+00:00" }],
       }),
     ).catch(() => undefined),
     runStandaloneCommands(
       standaloneOptions(runtime, freshness, context, {
         transport: isolatedTransport,
         sessionId: secondSession,
-        searchQuery: [{ q: `${options.query} isolated B` }],
+        time: [{ utc_offset: "+01:00" }],
       }),
     ).catch(() => undefined),
   ]);
@@ -629,6 +617,19 @@ function unsupportedResult(
   context: SearchContextSize,
   freshness: Freshness,
 ): E2eResult | undefined {
+  if (api === "standalone" && (suite === "matrix" || suite === "concurrency")) {
+    return {
+      suite,
+      name,
+      api,
+      context,
+      freshness,
+      ok: true,
+      skipped: true,
+      ms: 0,
+      message: "standalone search_query is disabled; use responses/codex_search",
+    };
+  }
   if (api === "standalone" && isUnsupportedStandaloneCombination(context, freshness)) {
     return {
       suite,

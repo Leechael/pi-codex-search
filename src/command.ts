@@ -14,9 +14,9 @@ import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
-  DEFAULT_SEARCH_API,
   DEFAULT_SEARCH_CONTEXT_SIZE,
-  DEFAULT_TOOL_NAME,
+  DEFAULT_STANDALONE_ENABLED,
+  STANDALONE_TOOL_NAME,
   deleteConfig,
   getConfigPath,
   loadConfig,
@@ -36,7 +36,8 @@ const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
 const isDefaultTag = (value: string): boolean => value.endsWith(DEFAULT_SUFFIX);
 
 function normalizeStandaloneSearchContext(config: PiCodexSearchConfig): boolean {
-  if (config.searchApi !== "standalone" || config.searchContextSize !== "low") return false;
+  const standaloneEnabled = config.standaloneEnabled ?? config.searchApi === "standalone";
+  if (!standaloneEnabled || config.searchContextSize !== "low") return false;
   config.searchContextSize = DEFAULT_SEARCH_CONTEXT_SIZE;
   return true;
 }
@@ -77,17 +78,19 @@ const CYCLE_FIELDS: CycleField[] = [
     },
   },
   {
-    id: "searchApi",
-    label: "Search API",
-    description: "responses (default, stable) or standalone (experimental) backend",
-    values: () => [defaultTag(DEFAULT_SEARCH_API), "standalone"],
+    id: "standaloneEnabled",
+    label: "Standalone web tool",
+    description:
+      "Register codex_standalone_web for page open/find/click/screenshot and domain lookups",
+    values: () => [defaultTag(String(DEFAULT_STANDALONE_ENABLED)), "true"],
     get: (c) =>
-      c.searchApi === undefined || c.searchApi === DEFAULT_SEARCH_API
-        ? defaultTag(DEFAULT_SEARCH_API)
-        : c.searchApi,
+      c.standaloneEnabled === undefined && c.searchApi !== "standalone"
+        ? defaultTag(String(DEFAULT_STANDALONE_ENABLED))
+        : String(c.standaloneEnabled ?? c.searchApi === "standalone"),
     apply: (c, v) => {
-      if (isDefaultTag(v)) delete c.searchApi;
-      else c.searchApi = v as PiCodexSearchConfig["searchApi"];
+      delete c.searchApi;
+      if (isDefaultTag(v)) delete c.standaloneEnabled;
+      else c.standaloneEnabled = v === "true";
       normalizeStandaloneSearchContext(c);
     },
   },
@@ -110,7 +113,7 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Search context size",
     description: "Amount of web context to retrieve",
     values: (c) =>
-      c.searchApi === "standalone"
+      c.standaloneEnabled || c.searchApi === "standalone"
         ? [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "high"]
         : [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
     get: (c) =>
@@ -126,17 +129,6 @@ const CYCLE_FIELDS: CycleField[] = [
 ];
 
 const TEXT_FIELDS: TextField[] = [
-  {
-    id: "toolName",
-    label: "Tool name",
-    description: "Tool name exposed to the LLM",
-    defaultDisplay: DEFAULT_TOOL_NAME,
-    get: (c) => c.toolName,
-    apply: (c, v) => {
-      if (v) c.toolName = v;
-      else delete c.toolName;
-    },
-  },
   {
     id: "model",
     label: "Model",
@@ -506,16 +498,17 @@ async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
 export function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   const lines = ["Codex Search settings:"];
   lines.push(`  enabled             = ${resolved.enabled}`);
-  lines.push(`  toolName            = ${resolved.toolName}`);
+  lines.push(`  searchToolName      = codex_search`);
+  lines.push(`  standaloneToolName  = ${STANDALONE_TOOL_NAME}`);
   lines.push(`  model               = ${resolved.model ?? "(auto from /codex/models)"}`);
   lines.push(`  baseUrl             = ${resolved.baseUrl ?? "(default)"}`);
   lines.push(`  clientVersion       = ${resolved.clientVersion ?? "(default)"}`);
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);
-  lines.push(
-    `  searchApi           = ${resolved.searchApi}${resolved.searchApi === "standalone" ? " (experimental)" : ""}`,
-  );
+  lines.push(`  searchApi           = responses`);
+  lines.push(`  standaloneEnabled   = ${resolved.standaloneEnabled}`);
   lines.push(`  maxBatchSize        = ${resolved.batchSize}`);
+  lines.push(`  standaloneBatchSize = 1`);
   lines.push("");
   lines.push("Sources (env > project > home):");
   lines.push(`  env     = ${describeSource(resolved.sources.env)}`);

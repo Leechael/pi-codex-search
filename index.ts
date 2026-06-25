@@ -25,7 +25,12 @@ import {
   type StandaloneCommandsOptions,
 } from "./src/codex.ts";
 import { registerSettingsCommand } from "./src/command.ts";
-import { type Freshness, loadConfig, type ResolvedConfig } from "./src/config.ts";
+import {
+  STANDALONE_TOOL_NAME,
+  type Freshness,
+  loadConfig,
+  type ResolvedConfig,
+} from "./src/config.ts";
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
@@ -79,9 +84,9 @@ interface WebSearchDetails {
 function buildToolDescription(config: ResolvedConfig): string {
   const toolName = config.toolName;
   if (config.searchApi === "standalone") {
-    return `${toolName}: search the web, open/fetch webpages, and look up live information (finance, weather, sports, time, images) using the configured ChatGPT Codex subscription.`;
+    return `${toolName}: open/fetch webpages, find text, click link ids, screenshot pages, and look up finance/weather/sports/time using the configured ChatGPT Codex subscription.`;
   }
-  return `${toolName}: search the web using the configured ChatGPT Codex subscription. Web content lookup requires switching searchApi to "standalone" in settings.`;
+  return `${toolName}: search the web using the configured ChatGPT Codex subscription.`;
 }
 
 function buildSearchParametersSchema(config: ResolvedConfig) {
@@ -106,14 +111,6 @@ function buildSearchParametersSchema(config: ResolvedConfig) {
 }
 
 const StandaloneParametersSchema = Type.Object({
-  queries: Type.Optional(
-    Type.Array(Type.String({ minLength: 1 }), {
-      minItems: 1,
-      maxItems: 4,
-      description:
-        "One or more search queries. Standalone mode sends each query as a separate Codex request.",
-    }),
-  ),
   search_context_size: Type.Optional(
     StringEnum(["medium", "high"] as const, {
       description:
@@ -128,7 +125,8 @@ const StandaloneParametersSchema = Type.Object({
   ),
   urls: Type.Optional(
     Type.Array(Type.String({ minLength: 1 }), {
-      description: "URLs to open/fetch directly.",
+      maxItems: 1,
+      description: "One URL to open/fetch directly.",
     }),
   ),
   find: Type.Optional(
@@ -137,7 +135,7 @@ const StandaloneParametersSchema = Type.Object({
         url: Type.String({ minLength: 1 }),
         pattern: Type.String({ minLength: 1 }),
       }),
-      { description: "Find a pattern within a webpage." },
+      { maxItems: 1, description: "Find a pattern within a previously opened webpage." },
     ),
   ),
   click: Type.Optional(
@@ -146,7 +144,7 @@ const StandaloneParametersSchema = Type.Object({
         url: Type.String({ minLength: 1 }),
         id: Type.Integer({ minimum: 0 }),
       }),
-      { description: "Follow a link id from a previously opened page." },
+      { maxItems: 1, description: "Follow one link id from a previously opened page." },
     ),
   ),
   screenshot: Type.Optional(
@@ -155,7 +153,7 @@ const StandaloneParametersSchema = Type.Object({
         url: Type.String({ minLength: 1 }),
         pageno: Type.Integer({ minimum: 0 }),
       }),
-      { description: "Capture a screenshot of a previously opened page." },
+      { maxItems: 1, description: "Capture one screenshot of a previously opened page." },
     ),
   ),
   finance: Type.Optional(
@@ -165,7 +163,7 @@ const StandaloneParametersSchema = Type.Object({
         type: StringEnum(["equity", "fund", "crypto", "index"] as const),
         market: Type.Optional(Type.String()),
       }),
-      { description: "Look up stock/ETF/crypto/index prices." },
+      { maxItems: 1, description: "Look up one stock/ETF/crypto/index price." },
     ),
   ),
   weather: Type.Optional(
@@ -175,7 +173,7 @@ const StandaloneParametersSchema = Type.Object({
         start: Type.Optional(Type.String()),
         duration: Type.Optional(Type.Integer({ minimum: 0 })),
       }),
-      { description: "Look up weather forecasts." },
+      { maxItems: 1, description: "Look up one weather forecast." },
     ),
   ),
   sports: Type.Optional(
@@ -200,7 +198,7 @@ const StandaloneParametersSchema = Type.Object({
         num_games: Type.Optional(Type.Integer({ minimum: 0 })),
         locale: Type.Optional(Type.String()),
       }),
-      { description: "Look up sports schedules and standings." },
+      { maxItems: 1, description: "Look up one sports schedule or standings request." },
     ),
   ),
   time: Type.Optional(
@@ -208,13 +206,8 @@ const StandaloneParametersSchema = Type.Object({
       Type.Object({
         utc_offset: Type.String({ minLength: 1 }),
       }),
-      { description: "Get time for UTC offsets." },
+      { maxItems: 1, description: "Get time for one UTC offset." },
     ),
-  ),
-  image_queries: Type.Optional(
-    Type.Array(Type.String({ minLength: 1 }), {
-      description: "Image search queries.",
-    }),
   ),
 });
 
@@ -224,6 +217,7 @@ type ToolParameters = Partial<
   Omit<StandaloneParameters, "queries" | "search_context_size" | "freshness">
 > & {
   queries?: string[];
+  image_queries?: string[];
   search_context_size?: SearchContextSize;
   freshness?: Freshness;
 };
@@ -241,16 +235,16 @@ function buildTool(config: ResolvedConfig) {
     description: buildToolDescription(config),
     promptSnippet:
       config.searchApi === "standalone"
-        ? `${config.toolName}: search the web, open/fetch webpages, find text in pages, follow page link ids, take screenshots, and look up finance/weather/sports/time using the configured ChatGPT Codex subscription.`
+        ? `${config.toolName}: open/fetch webpages, find text in pages, follow page link ids, take screenshots, and look up finance/weather/sports/time using the configured ChatGPT Codex subscription.`
         : `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
       config.searchApi === "standalone"
-        ? "Standalone mode can search, open/fetch URLs, find text within opened pages, click link ids, take screenshots, and run finance/weather/sports/time lookups. Send each action serially as a separate Codex request; do not batch standalone actions into one backend call. Do not use search_context_size low in standalone; use medium or high."
+        ? "Standalone mode can open/fetch URLs, find text within opened pages, click link ids, take screenshots, and run finance/weather/sports/time lookups. Send exactly one standalone action per tool call. Use codex_search, not codex_standalone_web, for web search. Do not use search_context_size low in standalone; use medium or high."
         : `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
       config.searchApi === "standalone"
-        ? "When the user asks to read or inspect a webpage, use urls/open plus follow-up find/click/screenshot actions instead of shelling out to curl."
-        : "Webpage open/fetch actions require searchApi=standalone; responses mode supports search queries only.",
+        ? "When the user asks to read or inspect a webpage, first use urls/open, then use follow-up find/click/screenshot actions on the same URL instead of shelling out to curl."
+        : "For webpage open/fetch, find, click, screenshot, finance, weather, sports, or time lookups, use codex_standalone_web when that tool is enabled.",
       "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
@@ -282,7 +276,7 @@ function buildTool(config: ResolvedConfig) {
       ) {
         throw new CodexError(
           "schema",
-          "At least one query, url, image query, or lookup command is required",
+          "At least one query, url, page action, or lookup command is required",
         );
       }
 
@@ -321,6 +315,12 @@ function buildTool(config: ResolvedConfig) {
       });
 
       if (config.searchApi === "standalone") {
+        if (queries.length > 0 || imageQueries.length > 0) {
+          throw new CodexError(
+            "schema",
+            "codex_standalone_web does not support search or image search queries. Use codex_search for web search.",
+          );
+        }
         const refStore = createRefStore();
         const sessionDir = ctx.sessionManager.getSessionDir();
         await refStore.load(sessionDir);
@@ -355,21 +355,31 @@ function buildTool(config: ResolvedConfig) {
             query: `find "${c.pattern}" in ${c.url}`,
             buildOptions: () => ({
               ...baseStandaloneOptions,
-              find: [{ refId: refStore.resolveRefId(c.url) ?? c.url, pattern: c.pattern }],
+              find: [
+                {
+                  refId: resolveStandalonePageRef(refStore, c.url, "find"),
+                  pattern: c.pattern,
+                },
+              ],
             }),
           })),
           ...clickCommands.map((c: { url: string; id: number }) => ({
             query: `click ${c.id} in ${c.url}`,
             buildOptions: () => ({
               ...baseStandaloneOptions,
-              click: [{ refId: refStore.resolveRefId(c.url) ?? c.url, id: c.id }],
+              click: [{ refId: resolveStandalonePageRef(refStore, c.url, "click"), id: c.id }],
             }),
           })),
           ...screenshotCommands.map((c: { url: string; pageno: number }) => ({
             query: `screenshot ${c.pageno} of ${c.url}`,
             buildOptions: () => ({
               ...baseStandaloneOptions,
-              screenshot: [{ refId: refStore.resolveRefId(c.url) ?? c.url, pageno: c.pageno }],
+              screenshot: [
+                {
+                  refId: resolveStandalonePageRef(refStore, c.url, "screenshot"),
+                  pageno: c.pageno,
+                },
+              ],
             }),
           })),
           ...financeCommands.map((c) => ({
@@ -391,6 +401,12 @@ function buildTool(config: ResolvedConfig) {
         ];
 
         const total = standaloneCalls.length;
+        if (total > 1) {
+          throw new CodexError(
+            "schema",
+            `${config.toolName} accepts exactly one standalone action per tool call. Split the request or use codex_search for batched search.`,
+          );
+        }
         let completed = 0;
         const emitPartial = (partialText: string) => {
           onUpdate?.({
@@ -467,7 +483,7 @@ function buildTool(config: ResolvedConfig) {
       ) {
         throw new CodexError(
           "schema",
-          `Open webpage, image search, and domain lookups require searchApi="standalone". Current mode is "responses".`,
+          `Open webpage and domain lookups require codex_standalone_web. Current tool is codex_search. Search requests should stay on codex_search.`,
         );
       }
 
@@ -654,7 +670,18 @@ export default function codexWebSearchExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     const config = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
     if (!config.enabled) return;
-    pi.registerTool(buildTool(config));
+
+    pi.registerTool(buildTool({ ...config, searchApi: "responses", toolName: "codex_search" }));
+    if (config.standaloneEnabled) {
+      pi.registerTool(
+        buildTool({
+          ...config,
+          searchApi: "standalone",
+          toolName: STANDALONE_TOOL_NAME,
+          batchSize: 1,
+        }),
+      );
+    }
   });
 }
 
@@ -795,6 +822,20 @@ function renderCallQueries(queries: unknown[], theme: Theme): string {
         `${theme.fg("accent", iconPrefix)}${theme.fg("dim", line.slice(iconPrefix.length))}`,
     )
     .join("\n");
+}
+
+function resolveStandalonePageRef(
+  refStore: ReturnType<typeof createRefStore>,
+  urlOrRef: string,
+  action: string,
+): string {
+  const refId = refStore.resolveRefId(urlOrRef);
+  if (refId) return refId;
+  if (/^turn\d+(?:view|fetch)\d+$/.test(urlOrRef)) return urlOrRef;
+  throw new CodexError(
+    "schema",
+    `${action} requires opening ${urlOrRef} with codex_standalone_web urls first in this session.`,
+  );
 }
 
 export function selectStandalonePageRefId(

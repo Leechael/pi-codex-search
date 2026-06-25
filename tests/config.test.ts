@@ -218,13 +218,14 @@ describe("config loader", () => {
     await assert.rejects(loadConfig(cwd), /Invalid freshness/);
   });
 
-  it("reads indexed freshness and responses search API from env", async () => {
+  it("reads indexed freshness and standalone tool flag from env", async () => {
     process.env.PI_CODEX_WEB_SEARCH_FRESHNESS = "indexed";
-    process.env.PI_CODEX_WEB_SEARCH_API = "responses";
+    process.env.PI_CODEX_WEB_STANDALONE_ENABLED = "true";
 
     const resolved = await loadConfig(cwd);
     assert.equal(resolved.defaultFreshness, "indexed");
     assert.equal(resolved.searchApi, "responses");
+    assert.equal(resolved.standaloneEnabled, true);
   });
 
   it("rejects an invalid searchApi value", async () => {
@@ -249,18 +250,20 @@ describe("config loader", () => {
     assert.equal(resolved.batchSize, 10);
   });
 
-  it("formats status with max batch size and experimental standalone marker", async () => {
+  it("formats status with responses batch size and standalone batch lock", async () => {
     await mkdir(join(cwd, ".pi"), { recursive: true });
     await writeFile(
       join(cwd, ".pi", CONFIG_FILE_NAME),
-      JSON.stringify({ batchSize: 8, searchApi: "standalone" }),
+      JSON.stringify({ batchSize: 8, standaloneEnabled: true }),
       "utf-8",
     );
 
     const status = formatStatus(await loadConfig(cwd), cwd);
 
-    assert.match(status, /searchApi\s+= standalone \(experimental\)/);
+    assert.match(status, /searchApi\s+= responses/);
+    assert.match(status, /standaloneEnabled\s+= true/);
     assert.match(status, /maxBatchSize\s+= 8/);
+    assert.match(status, /standaloneBatchSize\s+= 1/);
     assert.doesNotMatch(status, /batchSize\s+=/);
   });
 

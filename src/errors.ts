@@ -30,14 +30,14 @@ export function formatHttpErrorBody(text: string, mode: "responses" | "standalon
   if (isCloudflareChallenge(text)) {
     const advice =
       mode === "standalone"
-        ? 'Switch searchApi to "responses" or retry after Codex/ChatGPT has refreshed its Cloudflare clearance.'
+        ? "Use codex_search for search, or retry after Codex/ChatGPT has refreshed its Cloudflare clearance."
         : "Retry after Codex/ChatGPT has refreshed its Cloudflare clearance.";
     return `Cloudflare challenge blocked the Codex request. ${advice}`;
   }
   return text;
 }
 
-function isCloudflareChallenge(text: string): boolean {
+export function isCloudflareChallenge(text: string): boolean {
   const lower = text.toLowerCase();
   return (
     lower.includes("/cdn-cgi/challenge-platform/") ||

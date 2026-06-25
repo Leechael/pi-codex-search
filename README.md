@@ -5,7 +5,7 @@
 
 **Search the web in Pi through your Codex subscription.**
 
-Pi keeps the harness small. Codex already has a ChatGPT-backed search path. This package connects the two: it adds a `codex_search` tool to Pi and uses the same `openai-codex` login Pi already knows about.
+Pi keeps the harness small. Codex already has a ChatGPT-backed search path. This package connects the two: it adds a `codex_search` tool to Pi and uses the same `openai-codex` login Pi already knows about. An optional `codex_standalone_web` tool exposes Codex's experimental webpage actions.
 
 No `ACCESS_TOKEN` env var. No separate login flow. If Pi can use your Codex subscription, this extension can use the same auth.
 
@@ -18,20 +18,21 @@ This extension is for Pi workflows that need fresh or source-backed information:
 - **Look up current docs and release notes.** Ask the model to check things that changed after its training cutoff.
 - **Get sources with the answer.** Search results include citations when Codex returns them.
 - **Reuse your Codex login.** The tool uses Pi's existing `openai-codex` OAuth credential instead of asking you to paste tokens.
-- **Batch related searches in Responses mode.** One tool call can run related queries together. Standalone mode sends each action as its own Codex request because `/alpha/search` rejects multi-action batching.
-- **Keep projects in control.** Rename the tool, change defaults, or disable it per project.
+- **Batch related searches in Responses mode.** One `codex_search` call can run related queries together.
+- **Inspect webpages when explicitly enabled.** `codex_standalone_web` sends one standalone action per tool call because `/alpha/search` rejects multi-action batching.
+- **Keep projects in control.** Change defaults, enable the standalone tool, or disable the extension per project.
 
 ## What this package adds
 
-- A `codex_search` Pi tool.
-- 1–5 search queries per call in the default Responses API.
-- Experimental standalone `/alpha/search` mode with search, image search, open, find, click, screenshot, finance, weather, sports, and time commands, sent serially as one action per backend request.
+- A `codex_search` Pi tool using the Responses API.
+- 1–32 search queries per `codex_search` call, controlled by `batchSize`.
+- Optional `codex_standalone_web` using experimental `/alpha/search` with open, find, click, screenshot, finance, weather, sports, and time commands. It accepts exactly one action per tool call.
 - `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size. Standalone mode disables `low` because Codex returns Cloudflare challenges for low-context standalone requests.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
 - Structured details: model, citations, search calls, response ids, usage, and per-query failures.
 - Config files for home and project defaults.
-- `/codex-search-settings` for status, editing, reset, rename, and disable.
+- `/codex-search-settings` for status, editing, reset, standalone enablement, and disable.
 
 ## Install
 
@@ -72,11 +73,14 @@ Set `enabled: false` if you want the extension installed but hidden for a projec
 
 ## Tool
 
-Default tool name:
+Default tools:
 
 ```text
 codex_search
+codex_standalone_web
 ```
+
+`codex_search` is always registered when the extension is enabled. `codex_standalone_web` is optional and off by default.
 
 Example call:
 
@@ -91,21 +95,21 @@ Example call:
 }
 ```
 
-Arguments in default `responses` mode:
+Arguments for `codex_search`:
 
-- `queries` — required array of 1–5 search questions. Queries run in parallel and results are grouped by query.
-- `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`. In standalone mode, use `medium` or `high` only.
+- `queries` — required array of search questions. Queries run in parallel and results are grouped by query. The default max is 5 and the hard max is 32.
+- `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
 - `freshness` — optional, `live`, `indexed`, or `cached`; defaults to `live`.
 
-Extra arguments in experimental `standalone` mode:
+Arguments for optional `codex_standalone_web`:
 
-- `queries` — optional array of 1–4 search questions. Each query is sent serially as a separate standalone request.
-- `urls` — pages to open/fetch directly.
-- `find` — `{ "url", "pattern" }` objects for in-page text search.
-- `click` — `{ "url", "id" }` objects for following link ids from an opened page.
-- `screenshot` — `{ "url", "pageno" }` objects for page screenshots.
-- `image_queries` — image search queries.
-- `finance`, `weather`, `sports`, `time` — Codex web lookup commands.
+- `urls` — one page to open/fetch directly.
+- `find` — one `{ "url", "pattern" }` object for in-page text search after opening the URL.
+- `click` — one `{ "url", "id" }` object for following a link id from an opened page.
+- `screenshot` — one `{ "url", "pageno" }` object for page screenshots after opening the URL.
+- `finance`, `weather`, `sports`, `time` — one Codex web lookup command.
+
+Standalone uses `medium` or `high` search context only. If standalone is enabled while the saved context is `low`, settings normalize it to `medium`.
 
 The tool returns text. When citations are available, the text includes a `Sources:` section.
 
@@ -132,7 +136,7 @@ Most users do not need to set this.
 
 ## Settings
 
-Most users only need `/login openai-codex`. Use settings when you want to rename the tool, disable it for a project, pin a model, or change defaults.
+Most users only need `/login openai-codex`. Use settings when you want to enable `codex_standalone_web`, disable the extension for a project, pin a model, or change defaults.
 
 Open the interactive settings dialog:
 
@@ -162,38 +166,38 @@ Full schema, all fields optional:
 ```json
 {
   "enabled": true,
-  "toolName": "codex_search",
+  "standaloneEnabled": false,
   "model": "gpt-5-codex",
   "baseUrl": "https://chatgpt.com/backend-api",
   "clientVersion": "1.0.0",
   "searchContextSize": "medium",
   "freshness": "live",
-  "searchApi": "responses"
+  "batchSize": 5
 }
 ```
 
-`enabled: false` skips tool registration entirely. The model will not see `codex_search` at all.
+`enabled: false` skips tool registration entirely. The model will not see `codex_search` or `codex_standalone_web`.
 
-`toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
+`standaloneEnabled: true` registers `codex_standalone_web`. It posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, accepts one action per tool call, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits. Use `codex_search` for web search queries.
 
-`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, sends each search/web action serially as a separate request, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits.
+`searchApi: "standalone"` from older configs is treated as `standaloneEnabled: true` for compatibility.
 
 Environment variable equivalents:
 
 | Field               | Env var                              |
 | ------------------- | ------------------------------------ |
 | `enabled`           | `PI_CODEX_WEB_SEARCH_ENABLED`        |
-| `toolName`          | `PI_CODEX_WEB_SEARCH_TOOL_NAME`      |
+| `standaloneEnabled` | `PI_CODEX_WEB_STANDALONE_ENABLED`    |
 | `model`             | `PI_CODEX_WEB_SEARCH_MODEL`          |
 | `baseUrl`           | `PI_CODEX_WEB_SEARCH_BASE_URL`       |
 | `clientVersion`     | `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` |
 | `searchContextSize` | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
 | `freshness`         | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
-| `searchApi`         | `PI_CODEX_WEB_SEARCH_API`            |
+| `batchSize`         | `PI_CODEX_WEB_SEARCH_BATCH_SIZE`     |
 
 `PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 
-The settings dialog shows a unified `SettingsList` view. The model picker loads available Codex models asynchronously after the dialog opens, so the UI appears immediately even when `/codex/models` is slow. Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the new tool name and defaults apply without restarting the whole terminal.
+The settings dialog shows a unified `SettingsList` view. The model picker loads available Codex models asynchronously after the dialog opens, so the UI appears immediately even when `/codex/models` is slow. Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the tool set and defaults apply without restarting the whole terminal.
 
 ## Notes
 
@@ -237,7 +241,7 @@ Set `model` in your config file, or set `PI_CODEX_WEB_SEARCH_MODEL`, to the Code
 
 ### A different extension already registers `codex_search`
 
-Use `/codex-search-settings` to rename this extension's tool, or set `toolName` in `~/.pi/pi-codex-search.json`. Tool renames apply after the settings dialog reloads Pi.
+The tool names are fixed as `codex_search` and `codex_standalone_web`. Disable conflicting extensions or tools with the same names.
 
 ## Development
 

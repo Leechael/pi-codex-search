@@ -1,4 +1,9 @@
-import { CodexError, classifyHttpStatus, formatHttpErrorBody } from "../errors.ts";
+import {
+  CodexError,
+  classifyHttpStatus,
+  formatHttpErrorBody,
+  isCloudflareChallenge,
+} from "../errors.ts";
 import type { CodexTransport } from "../transport.ts";
 import type {
   CodexWebSearchResult,
@@ -223,21 +228,38 @@ export async function runStandaloneCommands(
   };
   body.max_output_tokens = maxOutputTokens ?? 8000;
 
-  const response = await transport.fetch(transport.resolveSearchEndpoint(), {
+  const bodyText = JSON.stringify(body);
+  let response = await transport.fetch(transport.resolveSearchEndpoint(), {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: bodyText,
     signal,
   });
 
   if (!response.ok) {
-    const status = response.status;
-    const text = formatHttpErrorBody(await response.text(), "standalone");
-    throw new CodexError(
-      classifyHttpStatus(status),
-      `Codex standalone search request failed: HTTP ${status}: ${text}`,
-      status,
-    );
+    let status = response.status;
+    let rawText = await response.text();
+    if (status === 403 && isCloudflareChallenge(rawText) && !signal?.aborted) {
+      await delay(750, signal);
+      response = await transport.fetch(transport.resolveSearchEndpoint(), {
+        method: "POST",
+        headers,
+        body: bodyText,
+        signal,
+      });
+      if (!response.ok) {
+        status = response.status;
+        rawText = await response.text();
+      }
+    }
+    if (!response.ok) {
+      const text = formatHttpErrorBody(rawText, "standalone");
+      throw new CodexError(
+        classifyHttpStatus(status),
+        `Codex standalone search request failed: HTTP ${status}: ${text}`,
+        status,
+      );
+    }
   }
 
   const data = (await response.json()) as StandaloneSearchResponse;
@@ -254,6 +276,21 @@ export async function runStandaloneCommands(
   };
   if (data.encrypted_output !== undefined) result.encryptedOutput = data.encrypted_output;
   return result;
+}
+
+async function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return;
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }
 
 function buildInput(options: StandaloneCommandsOptions): unknown[] {
