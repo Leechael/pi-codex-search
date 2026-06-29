@@ -1,6 +1,6 @@
 {
   "name": "pi-codex-search",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Pi extension for Codex Web Search — reuse your ChatGPT Plus/Pro Codex subscription in pi-coding-agent",
   "keywords": [
     "chatgpt",
