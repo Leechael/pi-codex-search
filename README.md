@@ -224,7 +224,7 @@ This does not add browsing to the model provider itself. It adds a Pi tool. The 
 
 ### Account id
 
-Codex requests need both the access token and the ChatGPT account id. The extension first checks Pi's stored OAuth credential. If that does not include an account id, it tries to extract one from the access token. The Sign in with ChatGPT credential does not store one, so the extension depends on decoding it from the token.
+Codex requests send the ChatGPT account id in the `ChatGPT-Account-ID` header whenever it is available (from the stored OAuth credential, or decoded from the access token). When it is not available — for example the openai provider's Sign in with ChatGPT token only carries encrypted metadata — the request proceeds without the header, matching the behavior of the official Codex CLI; the backend decides whether to accept the token.
 
 ## Troubleshooting
 
@@ -239,10 +239,6 @@ Run:
 In Pi 0.99 and later the provider shows as `OpenAI Codex (legacy)`. The extension picks up the refreshed credential on the next call.
 
 If the failing call used the openai provider's Sign in with ChatGPT token (`credentialProvider: openai` or `auto` without a legacy credential) and the backend answered with an auth error, that token is not accepted by the Codex backend. Re-run `/login openai-codex`, or force the legacy credential with `credentialProvider: "openai-codex"`.
-
-### `codex_search` says the account id was not found
-
-The stored OAuth credential did not include an account id, and the extension could not decode one from the access token. Re-run `/login openai-codex` so Pi refreshes the credential.
 
 ### The model does not see `codex_search`
 

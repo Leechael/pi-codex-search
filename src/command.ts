@@ -463,7 +463,7 @@ async function loadModels(
   resolved: ResolvedConfig,
 ): Promise<CodexModel[]> {
   const credential = await resolveCodexCredential(ctx.modelRegistry, resolved.credentialProvider);
-  if (!credential?.accountId) return [];
+  if (!credential) return [];
 
   const opts: Parameters<typeof fetchCodexModels>[0] = {
     token: credential.token,

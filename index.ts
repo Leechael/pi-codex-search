@@ -303,9 +303,6 @@ function buildTool(config: ResolvedConfig) {
       if (!credential) {
         throw new CodexError("auth", missingCredentialMessage(config.credentialProvider));
       }
-      if (!credential.accountId) {
-        throw new CodexError("auth", missingAccountIdMessage(credential.source));
-      }
       const token = credential.token;
       const accountId = credential.accountId;
 
@@ -711,7 +708,7 @@ export default function codexWebSearchExtension(pi: ExtensionAPI) {
 async function resolveSearchModel(
   ctx: ExtensionContext,
   token: string,
-  accountId: string,
+  accountId: string | undefined,
   config: ResolvedConfig,
   signal: AbortSignal | undefined,
 ): Promise<string> {
@@ -737,13 +734,6 @@ function missingCredentialMessage(preference: CodexCredentialPreference): string
     return 'The openai provider has no "Sign in with ChatGPT" credential. Run `/login openai` and choose "Sign in with ChatGPT", or switch the codex-search `credentialProvider` setting back to `auto`.';
   }
   return 'OpenAI Codex subscription is not configured. Run `/login openai-codex` (listed as "OpenAI Codex (legacy)") and sign in with your ChatGPT Plus/Pro account.';
-}
-
-function missingAccountIdMessage(source: CodexCredentialSource): string {
-  if (source === "openai") {
-    return 'The "Sign in with ChatGPT" token of the openai provider did not provide a ChatGPT account id, which codex_search needs for the ChatGPT-Account-ID header. Run `/login openai-codex` (listed as "OpenAI Codex (legacy)") instead.';
-  }
-  return 'OpenAI Codex account id was not found in stored credentials or access token. Re-run `/login openai-codex` (listed as "OpenAI Codex (legacy)").';
 }
 
 function withCredentialHint(
