@@ -31,7 +31,11 @@ import {
   loadConfig,
   type ResolvedConfig,
 } from "./src/config.ts";
-import { resolveCodexAccountId } from "./src/pi-auth.ts";
+import {
+  resolveCodexCredential,
+  type CodexCredentialPreference,
+  type CodexCredentialSource,
+} from "./src/pi-auth.ts";
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
@@ -295,22 +299,15 @@ function buildTool(config: ResolvedConfig) {
 
       const startedAt = Date.now();
 
-      const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
-      if (!token) {
-        const err = new CodexError(
-          "auth",
-          "OpenAI Codex subscription is not configured. Run `/login openai-codex` and choose ChatGPT Plus/Pro.",
-        );
-        throw err;
+      const credential = await resolveCodexCredential(ctx.modelRegistry, config.credentialProvider);
+      if (!credential) {
+        throw new CodexError("auth", missingCredentialMessage(config.credentialProvider));
       }
-
-      const accountId = resolveCodexAccountId(token, ctx.modelRegistry);
-      if (!accountId) {
-        throw new CodexError(
-          "auth",
-          "OpenAI Codex account id was not found in stored credentials or access token. Re-run `/login openai-codex`.",
-        );
+      if (!credential.accountId) {
+        throw new CodexError("auth", missingAccountIdMessage(credential.source));
       }
+      const token = credential.token;
+      const accountId = credential.accountId;
 
       const model = await resolveSearchModel(ctx, token, accountId, config, signal);
       const freshness = params.freshness ?? config.defaultFreshness;
@@ -471,7 +468,10 @@ function buildTool(config: ResolvedConfig) {
               : `All ${failures.length} ${config.toolName} standalone actions failed: ${failures
                   .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
                   .join("; ")}`;
-          const err = new CodexError(primary?.kind ?? "unknown", summary) as CodexError & {
+          const err = new CodexError(
+            primary?.kind ?? "unknown",
+            withCredentialHint(summary, failures, credential.source),
+          ) as CodexError & {
             failures?: QueryFailure[];
           };
           err.failures = failures;
@@ -581,7 +581,10 @@ function buildTool(config: ResolvedConfig) {
             : `All ${failures.length} ${config.toolName} queries failed: ${failures
                 .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
                 .join("; ")}`;
-        const err = new CodexError(primary?.kind ?? "unknown", summary) as CodexError & {
+        const err = new CodexError(
+          primary?.kind ?? "unknown",
+          withCredentialHint(summary, failures, credential.source),
+        ) as CodexError & {
           failures?: QueryFailure[];
         };
         err.failures = failures;
@@ -727,6 +730,30 @@ async function resolveSearchModel(
     throw new CodexError("unknown", "Codex model list is empty.");
   }
   return model;
+}
+
+function missingCredentialMessage(preference: CodexCredentialPreference): string {
+  if (preference === "openai") {
+    return 'The openai provider has no "Sign in with ChatGPT" credential. Run `/login openai` and choose "Sign in with ChatGPT", or switch the codex-search `credentialProvider` setting back to `auto`.';
+  }
+  return 'OpenAI Codex subscription is not configured. Run `/login openai-codex` (listed as "OpenAI Codex (legacy)") and sign in with your ChatGPT Plus/Pro account.';
+}
+
+function missingAccountIdMessage(source: CodexCredentialSource): string {
+  if (source === "openai") {
+    return 'The "Sign in with ChatGPT" token of the openai provider did not provide a ChatGPT account id, which codex_search needs for the ChatGPT-Account-ID header. Run `/login openai-codex` (listed as "OpenAI Codex (legacy)") instead.';
+  }
+  return 'OpenAI Codex account id was not found in stored credentials or access token. Re-run `/login openai-codex` (listed as "OpenAI Codex (legacy)").';
+}
+
+function withCredentialHint(
+  summary: string,
+  failures: QueryFailure[],
+  source: CodexCredentialSource,
+): string {
+  if (source !== "openai") return summary;
+  if (!failures.some((failure) => failure.kind === "auth")) return summary;
+  return `${summary}\n\nThe request used the openai provider's "Sign in with ChatGPT" token, which the Codex backend may not accept. If it keeps failing, run /login openai-codex (listed as "OpenAI Codex (legacy)") or set the codex-search credentialProvider setting to "openai-codex".`;
 }
 
 function buildDetails(

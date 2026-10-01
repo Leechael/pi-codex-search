@@ -9,6 +9,7 @@ import {
   SettingsList,
 } from "@earendil-works/pi-tui";
 import { type CodexModel, fetchCodexModels } from "./codex.ts";
+import { CREDENTIAL_SOURCES, resolveCodexCredential } from "./pi-auth.ts";
 import {
   type ConfigScope,
   DEFAULT_BATCH_SIZE,
@@ -27,11 +28,9 @@ import {
   type ResolvedConfig,
   saveConfig,
 } from "./config.ts";
-import { resolveCodexAccountId } from "./pi-auth.ts";
 
 const COMMAND_NAME = "codex-search-settings";
 const SUBCOMMANDS = ["status", "reset"] as const;
-const OPENAI_CODEX_PROVIDER = "openai-codex";
 
 const DEFAULT_SUFFIX = " (default)";
 const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
@@ -108,6 +107,20 @@ const CYCLE_FIELDS: CycleField[] = [
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.freshness;
       else c.freshness = v as PiCodexSearchConfig["freshness"];
+    },
+  },
+  {
+    id: "credentialProvider",
+    label: "Credential",
+    description: "Login that provides the Codex token (auto = legacy first, then ChatGPT sign-in)",
+    values: () => [defaultTag("auto"), ...CREDENTIAL_SOURCES],
+    get: (c) =>
+      c.credentialProvider === undefined || c.credentialProvider === "auto"
+        ? defaultTag("auto")
+        : c.credentialProvider,
+    apply: (c, v) => {
+      if (isDefaultTag(v)) delete c.credentialProvider;
+      else c.credentialProvider = v as PiCodexSearchConfig["credentialProvider"];
     },
   },
   {
@@ -449,12 +462,13 @@ async function loadModels(
   ctx: ExtensionCommandContext,
   resolved: ResolvedConfig,
 ): Promise<CodexModel[]> {
-  const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
-  if (!token) return [];
-  const accountId = resolveCodexAccountId(token, ctx.modelRegistry);
-  if (!accountId) return [];
+  const credential = await resolveCodexCredential(ctx.modelRegistry, resolved.credentialProvider);
+  if (!credential?.accountId) return [];
 
-  const opts: Parameters<typeof fetchCodexModels>[0] = { token, accountId };
+  const opts: Parameters<typeof fetchCodexModels>[0] = {
+    token: credential.token,
+    accountId: credential.accountId,
+  };
   if (resolved.baseUrl !== undefined) opts.baseUrl = resolved.baseUrl;
   if (resolved.clientVersion !== undefined) opts.clientVersion = resolved.clientVersion;
   return fetchCodexModels(opts);
@@ -513,6 +527,7 @@ export function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);
   lines.push(`  searchApi           = responses`);
   lines.push(`  standaloneEnabled   = ${resolved.standaloneEnabled}`);
+  lines.push(`  credentialProvider  = ${resolved.credentialProvider}`);
   lines.push(`  maxBatchSize        = ${resolved.batchSize}`);
   lines.push(`  standaloneBatchSize = 1`);
   lines.push("");
