@@ -30,6 +30,7 @@ const ENV_KEYS = [
   "PI_CODEX_WEB_SEARCH_API",
   "PI_CODEX_WEB_STANDALONE_ENABLED",
   "PI_CODEX_WEB_SEARCH_BATCH_SIZE",
+  "PI_CODEX_WEB_SEARCH_CREDENTIAL",
 ] as const;
 
 describe("config loader", () => {
@@ -307,6 +308,30 @@ describe("config loader", () => {
     process.env.PI_CODEX_WEB_SEARCH_BATCH_SIZE = "8";
     const resolved = await loadConfig(cwd);
     assert.equal(resolved.batchSize, 8);
+  });
+
+  it("defaults credentialProvider to auto", async () => {
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.credentialProvider, "auto");
+    assert.match(formatStatus(resolved, cwd), /credentialProvider\s+= auto/);
+  });
+
+  it("reads credentialProvider from env", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_CREDENTIAL = "openai";
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.credentialProvider, "openai");
+    assert.equal(resolved.sources.env?.credentialProvider, "openai");
+  });
+
+  it("rejects an invalid credentialProvider", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_CREDENTIAL = "chatgpt";
+    await assert.rejects(loadConfig(cwd), /Invalid credentialProvider/);
+  });
+
+  it("reads credentialProvider from a config file", async () => {
+    await saveConfig("home", cwd, { credentialProvider: "openai-codex" });
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.credentialProvider, "openai-codex");
   });
 
   it("rejects an invalid batchSize", async () => {
