@@ -21,7 +21,11 @@ import {
   selectDefaultModel,
   type StandaloneCommandsOptions,
 } from "../src/codex.ts";
-import { resolveCodexAccountId } from "../src/pi-auth.ts";
+import {
+  resolveCodexAccountId,
+  resolveCodexCredential,
+  type StoredCredential,
+} from "../src/pi-auth.ts";
 import { formatQueryPreviewLines, selectStandalonePageRefId } from "../index.ts";
 
 describe("codex helpers", () => {
@@ -259,6 +263,123 @@ describe("codex helpers", () => {
       ),
       "acct_public",
     );
+  });
+
+  it("prefers the openai-codex credential in auto mode", async () => {
+    const registry = {
+      getApiKeyForProvider: async (provider: string) =>
+        provider === "openai-codex" ? "legacy-token" : "chatgpt-token",
+    };
+    const credential = await resolveCodexCredential(registry, "auto", (provider) =>
+      provider === "openai-codex" ? { type: "oauth", accountId: "acct_legacy" } : { type: "oauth" },
+    );
+    assert.equal(credential?.source, "openai-codex");
+    assert.equal(credential?.token, "legacy-token");
+    assert.equal(credential?.accountId, "acct_legacy");
+  });
+
+  it("falls back to the openai ChatGPT credential when the legacy credential is absent", async () => {
+    const registry = {
+      getApiKeyForProvider: async (provider: string) =>
+        provider === "openai" ? "chatgpt-token" : undefined,
+    };
+    const credential = await resolveCodexCredential(registry, "auto", () => ({ type: "oauth" }));
+    assert.equal(credential?.source, "openai");
+    assert.equal(credential?.token, "chatgpt-token");
+  });
+
+  it("skips the openai credential when it is not OAuth", async () => {
+    const registry = {
+      getApiKeyForProvider: async (provider: string) =>
+        provider === "openai" ? "sk-platform-key" : undefined,
+    };
+    const credential = await resolveCodexCredential(registry, "auto", (provider) =>
+      provider === "openai" ? { type: "api_key" } : undefined,
+    );
+    assert.equal(credential, undefined);
+  });
+
+  it("skips the openai credential when its token looks like a platform API key", async () => {
+    const registry = {
+      getApiKeyForProvider: async (provider: string) =>
+        provider === "openai" ? "sk-somethingelse" : undefined,
+    };
+    const credential = await resolveCodexCredential(registry, "auto", (provider) =>
+      provider === "openai" ? { type: "oauth" } : undefined,
+    );
+    assert.equal(credential, undefined);
+  });
+
+  it("honors an explicit openai preference even when the legacy credential exists", async () => {
+    const registry = {
+      getApiKeyForProvider: async (provider: string) =>
+        provider === "openai-codex" ? "legacy-token" : "chatgpt-token",
+    };
+    const credential = await resolveCodexCredential(registry, "openai", (provider) =>
+      provider === "openai-codex" ? { type: "oauth", accountId: "acct_legacy" } : { type: "oauth" },
+    );
+    assert.equal(credential?.source, "openai");
+    assert.equal(credential?.token, "chatgpt-token");
+  });
+
+  it("returns undefined for an explicit openai-codex preference when no token resolves", async () => {
+    const credential = await resolveCodexCredential(
+      { getApiKeyForProvider: async () => undefined },
+      "openai-codex",
+      () => undefined,
+    );
+    assert.equal(credential, undefined);
+  });
+
+  it("resolves the legacy token without a stored credential", async () => {
+    const credential = await resolveCodexCredential(
+      { getApiKeyForProvider: async () => "legacy-token" },
+      "openai-codex",
+      () => undefined,
+    );
+    assert.equal(credential?.source, "openai-codex");
+    assert.equal(credential?.token, "legacy-token");
+    assert.equal(credential?.accountId, undefined);
+  });
+
+  it("decodes the account id from the openai ChatGPT token when none is stored", async () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct_jwt" },
+      }),
+    ).toString("base64url");
+    const credential = await resolveCodexCredential(
+      { getApiKeyForProvider: async () => `header.${payload}.signature` },
+      "openai",
+      () => ({ type: "oauth" }),
+    );
+    assert.equal(credential?.source, "openai");
+    assert.equal(credential?.accountId, "acct_jwt");
+  });
+
+  it("allows a missing account id for the openai source", async () => {
+    const credential = await resolveCodexCredential(
+      { getApiKeyForProvider: async () => "opaque-token" },
+      "openai",
+      () => ({ type: "oauth" }),
+    );
+    assert.equal(credential?.source, "openai");
+    assert.equal(credential?.accountId, undefined);
+  });
+
+  it("uses the legacy authStorage when the public reader is unavailable", async () => {
+    const registry = {
+      getApiKeyForProvider: async () => "legacy-token",
+      authStorage: {
+        get: (provider: string): StoredCredential | undefined =>
+          provider === "openai-codex"
+            ? { type: "oauth", accountId: "acct_legacy_store" }
+            : undefined,
+      },
+    };
+    const credential = await resolveCodexCredential(registry, "auto", null);
+    assert.equal(credential?.source, "openai-codex");
+    assert.equal(credential?.accountId, "acct_legacy_store");
   });
 
   it("omits the ChatGPT-Account-ID header when no account id is provided", () => {
