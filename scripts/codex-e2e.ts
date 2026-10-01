@@ -17,6 +17,7 @@ import {
   type SearchContextSize,
   type StandaloneCommandsOptions,
 } from "../src/codex.ts";
+import { CREDENTIAL_SOURCES, type CodexCredentialSource } from "../src/pi-auth.ts";
 
 const PROVIDER = "openai-codex";
 const DEFAULT_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
@@ -31,6 +32,7 @@ type E2eSuite = (typeof SUITE_VALUES)[number];
 
 interface CliOptions {
   authPath: string;
+  credential: CodexCredentialSource;
   apis: SearchApi[];
   contexts: SearchContextSize[];
   freshnesses: Freshness[];
@@ -43,13 +45,14 @@ interface CliOptions {
 }
 
 interface AuthCredential {
+  type?: unknown;
   access?: unknown;
   accountId?: unknown;
   expires?: unknown;
 }
 
 interface AuthFile {
-  [PROVIDER]?: AuthCredential;
+  [provider: string]: AuthCredential | undefined;
 }
 
 interface E2eResult {
@@ -163,14 +166,30 @@ async function main(): Promise<void> {
 }
 
 async function buildRuntime(options: CliOptions): Promise<Runtime> {
-  const auth = await loadAuth(options.authPath);
-  const token = readString(auth.access, `${PROVIDER}.access`);
-  const accountId = readOptionalString(auth.accountId) ?? extractAccountIdFromToken(token);
-  if (!accountId) {
-    throw new Error(`${PROVIDER}.accountId is missing and could not be decoded from access token`);
+  const provider = options.credential;
+  const auth = await loadAuth(options.authPath, provider);
+  if (provider === "openai") {
+    if (auth.type !== "oauth") {
+      throw new Error(
+        `The "openai" entry in ${options.authPath} is not an OAuth (Sign in with ChatGPT) credential. Run /login openai in Pi and choose "Sign in with ChatGPT" first.`,
+      );
+    }
   }
-  warnIfExpired(auth.expires);
-  const model = options.model ?? (await resolveModel(token, accountId, options.baseUrl));
+  const token = readString(auth.access, `${provider}.access`);
+  if (provider === "openai" && token.startsWith("sk-")) {
+    throw new Error(
+      `The "openai" entry in ${options.authPath} holds an API key, not a Sign in with ChatGPT token; refusing to send it to the ChatGPT backend.`,
+    );
+  }
+  let accountId = readOptionalString(auth.accountId) ?? extractAccountIdFromToken(token) ?? "";
+  if (!accountId) {
+    console.warn(
+      `warning: no ChatGPT account id for the ${provider} credential; continuing without the ChatGPT-Account-ID header to probe whether the backend accepts the token`,
+    );
+  }
+  warnIfExpired(auth.expires, provider);
+  const model =
+    options.model ?? (await resolveModel(token, accountId || undefined, options.baseUrl));
   return { token, accountId, model, baseUrl: options.baseUrl };
 }
 
@@ -531,7 +550,7 @@ async function withTimedResult(
 
 async function resolveModel(
   token: string,
-  accountId: string,
+  accountId: string | undefined,
   baseUrl: string | undefined,
 ): Promise<string> {
   const models = await fetchCodexModels({ token, accountId, baseUrl });
@@ -540,12 +559,12 @@ async function resolveModel(
   return model;
 }
 
-async function loadAuth(path: string): Promise<AuthCredential> {
+async function loadAuth(path: string, provider: CodexCredentialSource): Promise<AuthCredential> {
   const raw = await readFile(path, "utf-8");
   const parsed = JSON.parse(raw) as AuthFile;
-  const credential = parsed[PROVIDER];
+  const credential = parsed[provider];
   if (!credential || typeof credential !== "object") {
-    throw new Error(`${PROVIDER} credential not found in ${path}`);
+    throw new Error(`${provider} credential not found in ${path}`);
   }
   return credential;
 }
@@ -553,6 +572,7 @@ async function loadAuth(path: string): Promise<AuthCredential> {
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = {
     authPath: DEFAULT_AUTH_PATH,
+    credential: PROVIDER,
     apis: [...API_VALUES],
     contexts: [...CONTEXT_VALUES],
     freshnesses: [...FRESHNESS_VALUES],
@@ -573,6 +593,16 @@ function parseArgs(args: string[]): CliOptions {
       case "--auth":
         options.authPath = next();
         break;
+      case "--credential": {
+        const value = next();
+        if (!CREDENTIAL_SOURCES.includes(value as CodexCredentialSource)) {
+          throw new Error(
+            `Invalid credential: ${value}. Expected one of ${CREDENTIAL_SOURCES.join(", ")}`,
+          );
+        }
+        options.credential = value as CodexCredentialSource;
+        break;
+      }
       case "--api":
         options.apis = parseList(next(), API_VALUES, "api");
         break;
@@ -709,11 +739,11 @@ function readBodyId(body: BodyInit | null | undefined): string | undefined {
   }
 }
 
-function warnIfExpired(value: unknown): void {
+function warnIfExpired(value: unknown, provider: CodexCredentialSource): void {
   const expires = typeof value === "number" ? value : undefined;
   if (expires !== undefined && expires <= Date.now()) {
     console.warn(
-      "warning: stored openai-codex access token appears expired; run /login openai-codex in Pi if requests fail with auth errors",
+      `warning: stored ${provider} access token appears expired; run /login ${provider} in Pi if requests fail with auth errors`,
     );
   }
 }
@@ -780,6 +810,9 @@ standalone/low is intentionally skipped because low-context standalone requests 
 
 Options:
   --auth PATH              Pi auth file (default: ~/.pi/agent/auth.json)
+  --credential NAME        Auth entry to use: openai-codex (default) or openai.
+                           Use "openai" after /login openai (Sign in with ChatGPT)
+                           to probe whether that token works with the Codex backend.
   --suite LIST             matrix, actions, session, concurrency, or comma list (default: all)
   --api LIST               responses, standalone, or comma list (default: both)
   --context LIST           low, medium, high, or comma list (default: all)
