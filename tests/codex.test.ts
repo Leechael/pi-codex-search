@@ -261,6 +261,13 @@ describe("codex helpers", () => {
     );
   });
 
+  it("omits the ChatGPT-Account-ID header when no account id is provided", () => {
+    const transport = createTransport({ token: "token" });
+    const headers = transport.buildHeaders("application/json");
+    assert.equal(headers.get("authorization"), "Bearer token");
+    assert.equal(headers.get("chatgpt-account-id"), null);
+  });
+
   it("selects default model first", () => {
     assert.equal(selectDefaultModel([{ id: "gpt-a" }, { id: "gpt-b", isDefault: true }]), "gpt-b");
     assert.equal(selectDefaultModel([{ id: "gpt-a" }]), "gpt-a");
