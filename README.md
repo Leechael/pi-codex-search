@@ -69,21 +69,15 @@ In Pi 0.99 and later the provider shows as `OpenAI Codex (legacy)`. Choose it if
 
 ### Sign in with ChatGPT (openai provider)
 
-Pi 0.99 also added `Sign in with ChatGPT` under `/login openai`. That credential targets `api.openai.com/v1`, but codex_search talks to `chatgpt.com/backend-api/codex/*`, so whether it works is unverified. The extension resolves credentials with `credentialProvider` (default `auto`):
+Pi 0.99 also added `Sign in with ChatGPT` under `/login openai`. That credential targets `api.openai.com/v1` and is **not accepted** by the Codex backend: requests to `chatgpt.com/backend-api/codex/*` fail with HTTP 401 `rejected_by_access_enforcement` (`no_matching_rule`). Verified empirically. `codex_search` needs the legacy `openai-codex` login.
 
-- `auto` (default): use `openai-codex` first; fall back to the openai provider's Sign in with ChatGPT credential only when no legacy credential exists.
+The extension still resolves credentials with `credentialProvider` (default `auto`), so a session that only has the new credential gets a clear, actionable error instead of a confusing failure:
+
+- `auto` (default): use `openai-codex` first; fall back to the openai provider's Sign in with ChatGPT credential only when no legacy credential exists (the backend rejects it with a 401, and the error points back to `/login openai-codex`).
 - `openai-codex`: only the legacy OpenAI Codex credential.
-- `openai`: only the openai provider's Sign in with ChatGPT credential.
+- `openai`: only the openai provider's Sign in with ChatGPT credential (kept for diagnostics and future token types).
 
-To test whether the new token works with the Codex backend, sign in with `/login openai`, then run:
-
-```bash
-npm run e2e:codex -- --credential openai --suite matrix --api responses --context medium --freshness live
-```
-
-A `200` means the ChatGPT sign-in token is accepted and `auto` fallback can be kept; a `401`/`403` means it is not, and you should keep (or re-run) `/login openai-codex`.
-
-The tool is registered by default. If Pi has no usable credential, or the ChatGPT account id cannot be found from the stored OAuth credential or decoded access token, the first `codex_search` call fails with an `auth` error that points back to the right `/login` command.
+The tool is registered by default. If Pi has no usable credential, the first `codex_search` call fails with an `auth` error that points back to the right `/login` command.
 
 Set `enabled: false` if you want the extension installed but hidden for a project.
 
@@ -239,6 +233,8 @@ Run:
 In Pi 0.99 and later the provider shows as `OpenAI Codex (legacy)`. The extension picks up the refreshed credential on the next call.
 
 If the failing call used the openai provider's Sign in with ChatGPT token (`credentialProvider: openai` or `auto` without a legacy credential) and the backend answered with an auth error, that token is not accepted by the Codex backend. Re-run `/login openai-codex`, or force the legacy credential with `credentialProvider: "openai-codex"`.
+
+An HTTP 401 whose body contains `rejected_by_access_enforcement` / `no_matching_rule` means the credential type is not authorized for the Codex backend at all; only the legacy `openai-codex` login works there.
 
 ### The model does not see `codex_search`
 
