@@ -112,7 +112,8 @@ const CYCLE_FIELDS: CycleField[] = [
   {
     id: "credentialProvider",
     label: "Credential",
-    description: "Login that provides the Codex token (auto = legacy first, then ChatGPT sign-in)",
+    description:
+      "Login that provides the Codex token (openai is diagnostic-only: the backend rejects it)",
     values: () => [defaultTag("auto"), ...CREDENTIAL_SOURCES],
     get: (c) =>
       c.credentialProvider === undefined || c.credentialProvider === "auto"

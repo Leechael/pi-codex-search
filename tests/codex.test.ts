@@ -278,14 +278,13 @@ describe("codex helpers", () => {
     assert.equal(credential?.accountId, "acct_legacy");
   });
 
-  it("falls back to the openai ChatGPT credential when the legacy credential is absent", async () => {
+  it("does not fall back to the openai credential in auto mode", async () => {
     const registry = {
       getApiKeyForProvider: async (provider: string) =>
         provider === "openai" ? "chatgpt-token" : undefined,
     };
     const credential = await resolveCodexCredential(registry, "auto", () => ({ type: "oauth" }));
-    assert.equal(credential?.source, "openai");
-    assert.equal(credential?.token, "chatgpt-token");
+    assert.equal(credential, undefined);
   });
 
   it("skips the openai credential when it is not OAuth", async () => {

@@ -24,7 +24,9 @@ export type CodexCredentialSource = "openai-codex" | "openai";
  * How codex_search picks its credential.
  * - "openai-codex": only the OpenAI Codex (legacy) OAuth credential.
  * - "openai": only the "Sign in with ChatGPT" credential of the openai provider.
- * - "auto" (default): openai-codex first, then openai.
+ *   Kept as an explicit diagnostic opt-in: the Codex backend rejects this token
+ *   type (HTTP 401 rejected_by_access_enforcement), so "auto" never selects it.
+ * - "auto" (default): only the legacy openai-codex credential.
  */
 export type CodexCredentialPreference = "auto" | CodexCredentialSource;
 
@@ -82,11 +84,12 @@ export function resolveCodexAccountId(
 /**
  * Resolve the credential codex_search should use against chatgpt.com/backend-api.
  *
- * The openai-codex OAuth credential is the known-good path. The openai provider's
- * "Sign in with ChatGPT" credential (pi >= 0.99) is accepted as a fallback because
- * it is also a ChatGPT subscription token, but only when it is an OAuth credential:
- * an OpenAI platform API key (type "api_key" or an `sk-` token) must never be sent
- * to the ChatGPT backend.
+ * The openai-codex OAuth credential is the only one the Codex backend accepts.
+ * The openai provider's "Sign in with ChatGPT" credential (pi >= 0.99) only
+ * qualifies under an explicit "openai" preference: it must be OAuth (an `sk-`
+ * platform key is never sent to the ChatGPT backend), and the backend rejects
+ * it with HTTP 401 rejected_by_access_enforcement, so "auto" does not fall
+ * back to it.
  *
  * The resolved `accountId` may be undefined; callers decide whether it is required.
  */
@@ -95,8 +98,11 @@ export async function resolveCodexCredential(
   preference: CodexCredentialPreference = "auto",
   readStoredCredential: StoredCredentialReader | null = getPublicCredentialReader() ?? null,
 ): Promise<ResolvedCodexCredential | undefined> {
+  // "auto" resolves the legacy credential only. Falling back to the openai
+  // ChatGPT sign-in credential would guarantee a backend 401 — see the
+  // preference docs above — so it is opt-in via an explicit "openai" value.
   const candidates: CodexCredentialSource[] =
-    preference === "auto" ? [OPENAI_CODEX_PROVIDER, OPENAI_PROVIDER] : [preference];
+    preference === "openai" ? [OPENAI_PROVIDER] : [OPENAI_CODEX_PROVIDER];
 
   for (const provider of candidates) {
     const stored = readStored(registry, provider, readStoredCredential);

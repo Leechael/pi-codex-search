@@ -73,9 +73,9 @@ Pi 0.99 also added `Sign in with ChatGPT` under `/login openai`. That credential
 
 The extension still resolves credentials with `credentialProvider` (default `auto`), so a session that only has the new credential gets a clear, actionable error instead of a confusing failure:
 
-- `auto` (default): use `openai-codex` first; fall back to the openai provider's Sign in with ChatGPT credential only when no legacy credential exists (the backend rejects it with a 401, and the error points back to `/login openai-codex`).
-- `openai-codex`: only the legacy OpenAI Codex credential.
-- `openai`: only the openai provider's Sign in with ChatGPT credential (kept for diagnostics and future token types).
+- `auto` (default): only the legacy `openai-codex` credential. If it is missing, `codex_search` fails with an error pointing at `/login openai-codex`; the ChatGPT sign-in credential is not tried, because the backend is known to reject it.
+- `openai-codex`: only the legacy OpenAI Codex credential (same behavior as `auto`).
+- `openai`: only the openai provider's Sign in with ChatGPT credential — diagnostic opt-in. Every request fails with the 401 above; kept for testing and for the day OpenAI changes the access rules.
 
 The tool is registered by default. If Pi has no usable credential, the first `codex_search` call fails with an `auth` error that points back to the right `/login` command.
 
