@@ -22,8 +22,10 @@ jobs:
           - pi-version: 0.79.10
           # 0.80.7: last release with ModelRegistry.authStorage (removed in 0.80.8)
           - pi-version: 0.80.7
-          # 0.82.0: latest, readStoredCredential path
-          - pi-version: 0.82.0
+          # 0.83.0: devDependencies floor; matches package.json
+          - pi-version: 0.83.0
+          # 0.99.2: latest; renames openai-codex to legacy, adds Sign in with ChatGPT
+          - pi-version: 0.99.2
             latest: true
     name: test (pi ${{ matrix.pi-version }})
     steps:

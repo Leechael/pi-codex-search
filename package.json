@@ -52,9 +52,9 @@
     "e2e:codex": "node scripts/codex-e2e.ts"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.83.0",
-    "@earendil-works/pi-coding-agent": "^0.83.0",
-    "@earendil-works/pi-tui": "^0.83.0",
+    "@earendil-works/pi-ai": "^0.99.2",
+    "@earendil-works/pi-coding-agent": "^0.99.2",
+    "@earendil-works/pi-tui": "^0.99.2",
     "@j178/prek": "^0.3.8",
     "@types/node": "^24.0.0",
     "oxfmt": "^0.44.0",

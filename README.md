@@ -65,9 +65,19 @@ Inside Pi, run:
 /login openai-codex
 ```
 
-Choose `ChatGPT Plus/Pro (Codex Subscription)` if Pi asks which provider to use. Pi stores and refreshes the credential.
+In Pi 0.99 and later the provider shows as `OpenAI Codex (legacy)`. Choose it if Pi asks which provider to use. Pi stores and refreshes the credential.
 
-The tool is registered by default. If Pi has no `openai-codex` token, or if the ChatGPT account id cannot be found from the stored OAuth credential or decoded access token, the first `codex_search` call fails with an `auth` error that points back to `/login openai-codex`.
+### Sign in with ChatGPT (openai provider)
+
+Pi 0.99 also added `Sign in with ChatGPT` under `/login openai`. That credential targets `api.openai.com/v1` and is **not accepted** by the Codex backend: requests to `chatgpt.com/backend-api/codex/*` fail with HTTP 401 `rejected_by_access_enforcement` (`no_matching_rule`). Verified empirically. `codex_search` needs the legacy `openai-codex` login.
+
+The extension still resolves credentials with `credentialProvider` (default `auto`), so a session that only has the new credential gets a clear, actionable error instead of a confusing failure:
+
+- `auto` (default): only the legacy `openai-codex` credential. If it is missing, `codex_search` fails with an error pointing at `/login openai-codex`; the ChatGPT sign-in credential is not tried, because the backend is known to reject it.
+- `openai-codex`: only the legacy OpenAI Codex credential (same behavior as `auto`).
+- `openai`: only the openai provider's Sign in with ChatGPT credential — diagnostic opt-in. Every request fails with the 401 above; kept for testing and for the day OpenAI changes the access rules.
+
+The tool is registered by default. If Pi has no usable credential, the first `codex_search` call fails with an `auth` error that points back to the right `/login` command.
 
 Set `enabled: false` if you want the extension installed but hidden for a project.
 
@@ -184,16 +194,17 @@ Full schema, all fields optional:
 
 Environment variable equivalents:
 
-| Field               | Env var                              |
-| ------------------- | ------------------------------------ |
-| `enabled`           | `PI_CODEX_WEB_SEARCH_ENABLED`        |
-| `standaloneEnabled` | `PI_CODEX_WEB_STANDALONE_ENABLED`    |
-| `model`             | `PI_CODEX_WEB_SEARCH_MODEL`          |
-| `baseUrl`           | `PI_CODEX_WEB_SEARCH_BASE_URL`       |
-| `clientVersion`     | `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` |
-| `searchContextSize` | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
-| `freshness`         | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
-| `batchSize`         | `PI_CODEX_WEB_SEARCH_BATCH_SIZE`     |
+| Field                | Env var                              |
+| -------------------- | ------------------------------------ |
+| `enabled`            | `PI_CODEX_WEB_SEARCH_ENABLED`        |
+| `standaloneEnabled`  | `PI_CODEX_WEB_STANDALONE_ENABLED`    |
+| `model`              | `PI_CODEX_WEB_SEARCH_MODEL`          |
+| `baseUrl`            | `PI_CODEX_WEB_SEARCH_BASE_URL`       |
+| `clientVersion`      | `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` |
+| `searchContextSize`  | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
+| `freshness`          | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
+| `batchSize`          | `PI_CODEX_WEB_SEARCH_BATCH_SIZE`     |
+| `credentialProvider` | `PI_CODEX_WEB_SEARCH_CREDENTIAL`     |
 
 `PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 
@@ -207,7 +218,7 @@ This does not add browsing to the model provider itself. It adds a Pi tool. The 
 
 ### Account id
 
-Codex requests need both the access token and the ChatGPT account id. The extension first checks Pi's stored OAuth credential. If that does not include an account id, it tries to extract one from the access token.
+Codex requests send the ChatGPT account id in the `ChatGPT-Account-ID` header whenever it is available (from the stored OAuth credential, or decoded from the access token). When it is not available — for example the openai provider's Sign in with ChatGPT token only carries encrypted metadata — the request proceeds without the header, matching the behavior of the official Codex CLI; the backend decides whether to accept the token.
 
 ## Troubleshooting
 
@@ -219,11 +230,11 @@ Run:
 /login openai-codex
 ```
 
-If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`. The extension picks up the refreshed credential on the next call.
+In Pi 0.99 and later the provider shows as `OpenAI Codex (legacy)`. The extension picks up the refreshed credential on the next call.
 
-### `codex_search` says the account id was not found
+If the failing call used the openai provider's Sign in with ChatGPT token (`credentialProvider: openai` or `auto` without a legacy credential) and the backend answered with an auth error, that token is not accepted by the Codex backend. Re-run `/login openai-codex`, or force the legacy credential with `credentialProvider: "openai-codex"`.
 
-The stored OAuth credential did not include an account id, and the extension could not decode one from the access token. Re-run `/login openai-codex` so Pi refreshes the credential.
+An HTTP 401 whose body contains `rejected_by_access_enforcement` / `no_matching_rule` means the credential type is not authorized for the Codex backend at all; only the legacy `openai-codex` login works there.
 
 ### The model does not see `codex_search`
 

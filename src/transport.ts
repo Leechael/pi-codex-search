@@ -14,7 +14,7 @@ import { wrapFetchWithCookies, type FetchLike } from "./cookies.ts";
 
 export interface TransportOptions {
   token: string;
-  accountId: string;
+  accountId?: string;
   baseUrl?: string;
   fetchImpl?: FetchLike;
 }
@@ -26,7 +26,7 @@ export interface CodexTransport {
   fetch: FetchLike;
   baseUrl: string;
   token: string;
-  accountId: string;
+  accountId?: string;
   buildHeaders(accept: string): Headers;
   resolveEndpoint(path: "models" | "responses"): string;
   resolveSearchEndpoint(): string;
@@ -91,7 +91,7 @@ export function createTransport(options: TransportOptions): CodexTransport {
     buildHeaders(accept: string): Headers {
       const headers = new Headers();
       headers.set("Authorization", `Bearer ${options.token}`);
-      headers.set("chatgpt-account-id", options.accountId);
+      if (options.accountId) headers.set("chatgpt-account-id", options.accountId);
       headers.set("originator", getCodexOriginator());
       headers.set("accept", accept);
       if (accept === "text/event-stream") {

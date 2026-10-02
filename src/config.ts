@@ -2,6 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SearchContextSize } from "./codex.ts";
+import { type CodexCredentialPreference, CREDENTIAL_PREFERENCES } from "./pi-auth.ts";
 
 export type SearchApi = "standalone" | "responses";
 
@@ -20,6 +21,7 @@ export interface PiCodexSearchConfig {
   searchApi?: SearchApi;
   standaloneEnabled?: boolean;
   batchSize?: number;
+  credentialProvider?: CodexCredentialPreference;
 }
 
 export interface ResolvedConfig {
@@ -33,6 +35,7 @@ export interface ResolvedConfig {
   searchApi: SearchApi;
   standaloneEnabled: boolean;
   batchSize: number;
+  credentialProvider: CodexCredentialPreference;
   sources: {
     project?: PiCodexSearchConfig;
     home?: PiCodexSearchConfig;
@@ -48,6 +51,7 @@ export const DEFAULT_SEARCH_API: SearchApi = "responses";
 export const DEFAULT_STANDALONE_ENABLED = false;
 export const STANDALONE_TOOL_NAME = "codex_standalone_web";
 export const DEFAULT_BATCH_SIZE = 5;
+export const DEFAULT_CREDENTIAL_PREFERENCE: CodexCredentialPreference = "auto";
 export const CONFIG_FILE_NAME = "pi-codex-search.json";
 const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const CONTEXT_SIZES: readonly SearchContextSize[] = ["low", "medium", "high"] as const;
@@ -96,6 +100,7 @@ export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<
       merged.standaloneEnabled ??
       (merged.searchApi === "standalone" ? true : DEFAULT_STANDALONE_ENABLED),
     batchSize: merged.batchSize ?? DEFAULT_BATCH_SIZE,
+    credentialProvider: merged.credentialProvider ?? DEFAULT_CREDENTIAL_PREFERENCE,
     sources: {},
   };
   if (merged.model !== undefined) resolved.model = merged.model;
@@ -178,6 +183,10 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
   if (standaloneEnabled !== undefined) env.standaloneEnabled = standaloneEnabled;
   const batchSize = integerEnv("PI_CODEX_WEB_SEARCH_BATCH_SIZE");
   if (batchSize !== undefined) env.batchSize = batchSize;
+  const credentialProvider = trimmedEnv("PI_CODEX_WEB_SEARCH_CREDENTIAL");
+  if (credentialProvider !== undefined) {
+    env.credentialProvider = credentialProvider as CodexCredentialPreference;
+  }
 
   if (Object.keys(env).length === 0) return undefined;
   validateConfig(env, "<env>");
@@ -226,6 +235,15 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
     throw new Error(
       `Invalid searchApi in ${sourceLabel}: ${JSON.stringify(config.searchApi)}. ` +
         `Expected one of ${SEARCH_API_VALUES.join(", ")}.`,
+    );
+  }
+  if (
+    config.credentialProvider !== undefined &&
+    !CREDENTIAL_PREFERENCES.includes(config.credentialProvider)
+  ) {
+    throw new Error(
+      `Invalid credentialProvider in ${sourceLabel}: ${JSON.stringify(config.credentialProvider)}. ` +
+        `Expected one of ${CREDENTIAL_PREFERENCES.join(", ")}.`,
     );
   }
   if (config.batchSize !== undefined) {

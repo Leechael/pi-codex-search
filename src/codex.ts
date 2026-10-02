@@ -54,7 +54,7 @@ export type { FetchLike } from "./cookies.ts";
 
 export interface FetchCodexModelsOptions {
   token: string;
-  accountId: string;
+  accountId?: string;
   baseUrl?: string;
   clientVersion?: string;
   signal?: AbortSignal;

@@ -11,26 +11,30 @@ import {
   runResponsesSearch,
   runStandaloneCommands,
   selectDefaultModel,
+  classifyError,
+  classifyHttpStatus,
   type CodexTransport,
   type CodexWebSearchResult,
   type Freshness,
   type SearchContextSize,
   type StandaloneCommandsOptions,
 } from "../src/codex.ts";
+import { CREDENTIAL_SOURCES, type CodexCredentialSource } from "../src/pi-auth.ts";
 
 const PROVIDER = "openai-codex";
 const DEFAULT_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
 const DEFAULT_QUERY = "OpenAI Codex release notes";
 const FRESHNESS_VALUES: readonly Freshness[] = ["live", "indexed", "cached"];
 const CONTEXT_VALUES: readonly SearchContextSize[] = ["low", "medium", "high"];
-const API_VALUES = ["responses", "standalone"] as const;
-const SUITE_VALUES = ["matrix", "actions", "session", "concurrency"] as const;
+const API_VALUES = ["responses", "standalone", "platform"] as const;
+const SUITE_VALUES = ["matrix", "actions", "session", "concurrency", "platform"] as const;
 
 type SearchApi = (typeof API_VALUES)[number];
 type E2eSuite = (typeof SUITE_VALUES)[number];
 
 interface CliOptions {
   authPath: string;
+  credential: CodexCredentialSource;
   apis: SearchApi[];
   contexts: SearchContextSize[];
   freshnesses: Freshness[];
@@ -43,13 +47,14 @@ interface CliOptions {
 }
 
 interface AuthCredential {
+  type?: unknown;
   access?: unknown;
   accountId?: unknown;
   expires?: unknown;
 }
 
 interface AuthFile {
-  [PROVIDER]?: AuthCredential;
+  [provider: string]: AuthCredential | undefined;
 }
 
 interface E2eResult {
@@ -78,9 +83,27 @@ interface Runtime {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const runtime = await buildRuntime(options);
   const results: E2eResult[] = [];
 
+  // The platform probe talks to api.openai.com/v1 with the openai credential
+  // and never touches the Codex backend, so it runs before the Codex runtime
+  // is built (which would fail at /codex/models for the openai credential).
+  if (options.suites.includes("platform")) {
+    const result = await runPlatformProbe(options);
+    results.push(result);
+    printResult(result);
+  }
+  options.suites = options.suites.filter((suite) => suite !== "platform");
+  if (options.suites.length === 0) {
+    const skipped = results.filter((result) => result.skipped).length;
+    const failed = results.filter((result) => !result.ok && !result.skipped).length;
+    const ok = results.filter((result) => result.ok && !result.skipped).length;
+    console.log(`summary: ${ok}/${results.length} ok, ${skipped} skipped`);
+    if (failed > 0) process.exitCode = 1;
+    return;
+  }
+
+  const runtime = await buildRuntime(options);
   if (options.suites.includes("matrix")) {
     for (const api of options.apis) {
       for (const context of options.contexts) {
@@ -163,14 +186,30 @@ async function main(): Promise<void> {
 }
 
 async function buildRuntime(options: CliOptions): Promise<Runtime> {
-  const auth = await loadAuth(options.authPath);
-  const token = readString(auth.access, `${PROVIDER}.access`);
-  const accountId = readOptionalString(auth.accountId) ?? extractAccountIdFromToken(token);
-  if (!accountId) {
-    throw new Error(`${PROVIDER}.accountId is missing and could not be decoded from access token`);
+  const provider = options.credential;
+  const auth = await loadAuth(options.authPath, provider);
+  if (provider === "openai") {
+    if (auth.type !== "oauth") {
+      throw new Error(
+        `The "openai" entry in ${options.authPath} is not an OAuth (Sign in with ChatGPT) credential. Run /login openai in Pi and choose "Sign in with ChatGPT" first.`,
+      );
+    }
   }
-  warnIfExpired(auth.expires);
-  const model = options.model ?? (await resolveModel(token, accountId, options.baseUrl));
+  const token = readString(auth.access, `${provider}.access`);
+  if (provider === "openai" && token.startsWith("sk-")) {
+    throw new Error(
+      `The "openai" entry in ${options.authPath} holds an API key, not a Sign in with ChatGPT token; refusing to send it to the ChatGPT backend.`,
+    );
+  }
+  let accountId = readOptionalString(auth.accountId) ?? extractAccountIdFromToken(token) ?? "";
+  if (!accountId) {
+    console.warn(
+      `warning: no ChatGPT account id for the ${provider} credential; continuing without the ChatGPT-Account-ID header to probe whether the backend accepts the token`,
+    );
+  }
+  warnIfExpired(auth.expires, provider);
+  const model =
+    options.model ?? (await resolveModel(token, accountId || undefined, options.baseUrl));
   return { token, accountId, model, baseUrl: options.baseUrl };
 }
 
@@ -193,6 +232,160 @@ function createRecordingTransport(runtime: Runtime, requestIds: string[]): Codex
       return await fetch(input, init);
     }) as typeof fetch,
   });
+}
+
+/**
+ * Probe the hosted Responses API on api.openai.com/v1 with the openai provider's
+ * "Sign in with ChatGPT" credential. This is the migration target if OpenAI ever
+ * sunsets the Codex backend (chatgpt.com/backend-api/codex/*): the new credential
+ * is verified rejected there, but pi itself streams chat through api.openai.com/v1
+ * with the same token. Open questions this probe answers: is the hosted web_search
+ * tool enabled for subscription-shared tokens, and does it hit a usage/billing wall?
+ */
+async function runPlatformProbe(options: CliOptions): Promise<E2eResult> {
+  const started = Date.now();
+  const base = {
+    suite: "platform" as E2eSuite,
+    name: "web_search",
+    api: "platform" as SearchApi,
+    context: "medium" as SearchContextSize,
+    freshness: "live" as Freshness,
+  };
+  if (options.credential !== "openai") {
+    return {
+      ...base,
+      ok: true,
+      skipped: true,
+      ms: 0,
+      message: "platform probe requires --credential openai (the Sign in with ChatGPT token)",
+    };
+  }
+  try {
+    const auth = await loadAuth(options.authPath, "openai");
+    if (auth.type !== "oauth") {
+      return {
+        ...base,
+        ok: false,
+        ms: Date.now() - started,
+        kind: "auth",
+        message: "the openai entry is not an OAuth (Sign in with ChatGPT) credential",
+      };
+    }
+    const token = readString(auth.access, "openai.access");
+    if (token.startsWith("sk-")) {
+      return {
+        ...base,
+        ok: false,
+        ms: Date.now() - started,
+        kind: "auth",
+        message: "refusing to probe with an sk- platform key",
+      };
+    }
+    warnIfExpired(auth.expires, "openai");
+    const model = options.model ?? "gpt-5";
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), options.timeoutMs);
+    try {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          model,
+          instructions: "You are a concise web search assistant.",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: options.query }],
+            },
+          ],
+          tools: [{ type: "web_search", search_context_size: "medium" }],
+          tool_choice: "required",
+          stream: true,
+          store: false,
+        }),
+        signal: ctrl.signal,
+      });
+      if (!response.ok) {
+        const text = (await response.text()).slice(0, 300).replace(/\s+/g, " ");
+        return {
+          ...base,
+          ok: false,
+          ms: Date.now() - started,
+          kind: classifyHttpStatus(response.status),
+          status: response.status,
+          message: text,
+        };
+      }
+      if (!response.body) {
+        return {
+          ...base,
+          ok: false,
+          ms: Date.now() - started,
+          kind: "unknown" as const,
+          message: "no body",
+        };
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let citationCount = 0;
+      let outcome: E2eResult | undefined;
+      try {
+        while (!outcome) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          citationCount += (buffer.match(/"type"\s*:\s*"url_citation"/g) ?? []).length;
+          if (buffer.includes("response.failed") || buffer.includes('"type":"error"')) {
+            const snippet = buffer.slice(0, 300).replace(/\s+/g, " ");
+            outcome = {
+              ...base,
+              ok: false,
+              ms: Date.now() - started,
+              kind: "unknown" as const,
+              message: `stream error: ${snippet}`,
+            };
+          } else if (buffer.includes("response.completed")) {
+            outcome = {
+              ...base,
+              ok: true,
+              ms: Date.now() - started,
+              textLength: buffer.length,
+              citationCount,
+              message: `api.openai.com/v1 accepted the ChatGPT sign-in token for hosted web_search (model ${model})`,
+            };
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+      return (
+        outcome ?? {
+          ...base,
+          ok: false,
+          ms: Date.now() - started,
+          kind: "timeout" as const,
+          message: "stream ended without response.completed",
+        }
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (error) {
+    return {
+      ...base,
+      ok: false,
+      ms: Date.now() - started,
+      kind: classifyError(error),
+      message: summarizeError(error),
+    };
+  }
 }
 
 async function runSearchCase(input: {
@@ -531,7 +724,7 @@ async function withTimedResult(
 
 async function resolveModel(
   token: string,
-  accountId: string,
+  accountId: string | undefined,
   baseUrl: string | undefined,
 ): Promise<string> {
   const models = await fetchCodexModels({ token, accountId, baseUrl });
@@ -540,12 +733,12 @@ async function resolveModel(
   return model;
 }
 
-async function loadAuth(path: string): Promise<AuthCredential> {
+async function loadAuth(path: string, provider: CodexCredentialSource): Promise<AuthCredential> {
   const raw = await readFile(path, "utf-8");
   const parsed = JSON.parse(raw) as AuthFile;
-  const credential = parsed[PROVIDER];
+  const credential = parsed[provider];
   if (!credential || typeof credential !== "object") {
-    throw new Error(`${PROVIDER} credential not found in ${path}`);
+    throw new Error(`${provider} credential not found in ${path}`);
   }
   return credential;
 }
@@ -553,6 +746,7 @@ async function loadAuth(path: string): Promise<AuthCredential> {
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = {
     authPath: DEFAULT_AUTH_PATH,
+    credential: PROVIDER,
     apis: [...API_VALUES],
     contexts: [...CONTEXT_VALUES],
     freshnesses: [...FRESHNESS_VALUES],
@@ -573,6 +767,16 @@ function parseArgs(args: string[]): CliOptions {
       case "--auth":
         options.authPath = next();
         break;
+      case "--credential": {
+        const value = next();
+        if (!CREDENTIAL_SOURCES.includes(value as CodexCredentialSource)) {
+          throw new Error(
+            `Invalid credential: ${value}. Expected one of ${CREDENTIAL_SOURCES.join(", ")}`,
+          );
+        }
+        options.credential = value as CodexCredentialSource;
+        break;
+      }
       case "--api":
         options.apis = parseList(next(), API_VALUES, "api");
         break;
@@ -618,6 +822,19 @@ function unsupportedResult(
   context: SearchContextSize,
   freshness: Freshness,
 ): E2eResult | undefined {
+  if (api === "platform") {
+    return {
+      suite,
+      name,
+      api,
+      context,
+      freshness,
+      ok: true,
+      skipped: true,
+      ms: 0,
+      message: "platform runs only in the platform suite (--suite platform)",
+    };
+  }
   if (api === "standalone" && (suite === "matrix" || suite === "concurrency")) {
     return {
       suite,
@@ -709,11 +926,11 @@ function readBodyId(body: BodyInit | null | undefined): string | undefined {
   }
 }
 
-function warnIfExpired(value: unknown): void {
+function warnIfExpired(value: unknown, provider: CodexCredentialSource): void {
   const expires = typeof value === "number" ? value : undefined;
   if (expires !== undefined && expires <= Date.now()) {
     console.warn(
-      "warning: stored openai-codex access token appears expired; run /login openai-codex in Pi if requests fail with auth errors",
+      `warning: stored ${provider} access token appears expired; run /login ${provider} in Pi if requests fail with auth errors`,
     );
   }
 }
@@ -780,6 +997,9 @@ standalone/low is intentionally skipped because low-context standalone requests 
 
 Options:
   --auth PATH              Pi auth file (default: ~/.pi/agent/auth.json)
+  --credential NAME        Auth entry to use: openai-codex (default) or openai.
+                           Use "openai" after /login openai (Sign in with ChatGPT)
+                           to probe whether that token works with the Codex backend.
   --suite LIST             matrix, actions, session, concurrency, or comma list (default: all)
   --api LIST               responses, standalone, or comma list (default: both)
   --context LIST           low, medium, high, or comma list (default: all)
@@ -789,6 +1009,12 @@ Options:
   --base-url URL           Override Codex base URL
   --timeout-ms N           Per-case timeout (default: 45000)
   --concurrency LIST       Parallel requests per concurrency combo, e.g. 2,4,8 (default: 2,4)
+
+Suite "platform" probes api.openai.com/v1/responses with the hosted web_search
+tool using the openai credential — the migration target if the Codex backend is
+ever sunset. It requires --credential openai and does not touch the Codex backend:
+
+  node scripts/codex-e2e.ts --credential openai --suite platform [--model gpt-5]
 `);
 }
 
