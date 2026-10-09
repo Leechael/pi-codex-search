@@ -16,6 +16,7 @@ export type {
 } from "./modes/types.ts";
 export type { CodexModel } from "./modes/types.ts";
 export { runResponsesSearch } from "./modes/responses.ts";
+export { runPlatformSearch, DEFAULT_PLATFORM_MODEL } from "./modes/platform.ts";
 export {
   runStandaloneCommands,
   externalWebAccessForFreshness,

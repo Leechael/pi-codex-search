@@ -15,6 +15,8 @@ import {
   wrapFetchWithCookies,
   runStandaloneCommands,
   runResponsesSearch,
+  runPlatformSearch,
+  DEFAULT_PLATFORM_MODEL,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
@@ -278,13 +280,14 @@ describe("codex helpers", () => {
     assert.equal(credential?.accountId, "acct_legacy");
   });
 
-  it("does not fall back to the openai credential in auto mode", async () => {
+  it("falls back to the openai ChatGPT credential when the legacy credential is absent", async () => {
     const registry = {
       getApiKeyForProvider: async (provider: string) =>
         provider === "openai" ? "chatgpt-token" : undefined,
     };
     const credential = await resolveCodexCredential(registry, "auto", () => ({ type: "oauth" }));
-    assert.equal(credential, undefined);
+    assert.equal(credential?.source, "openai");
+    assert.equal(credential?.token, "chatgpt-token");
   });
 
   it("skips the openai credential when it is not OAuth", async () => {
@@ -911,6 +914,62 @@ describe("codex helpers", () => {
       (error: unknown) => {
         assert.ok(error instanceof CodexError);
         assert.equal(error.kind, "rate_limit");
+        return true;
+      },
+    );
+  });
+
+  it("posts platform web search to api.openai.com/v1 without a ChatGPT-Account-ID header", async () => {
+    let requestedUrl = "";
+    let requestedHeaders = new Headers();
+    let requestedBody = {} as {
+      model?: string;
+      tools?: Array<Record<string, unknown>>;
+      stream?: boolean;
+    };
+    const sse = [
+      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[{"type":"url_citation","url":"https://example.test","title":"Example"}]}]}}\n\n',
+      'event: response.completed\ndata: {"response":{"usage":{"total_tokens":1}}}\n\n',
+    ].join("");
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedHeaders = new Headers(init?.headers);
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    };
+
+    const result = await runPlatformSearch({
+      query: "q",
+      model: DEFAULT_PLATFORM_MODEL,
+      token: "chatgpt-token",
+      searchContextSize: "medium",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedUrl, "https://api.openai.com/v1/responses");
+    assert.equal(requestedHeaders.get("authorization"), "Bearer chatgpt-token");
+    assert.equal(requestedHeaders.get("chatgpt-account-id"), null);
+    assert.equal(requestedBody.model, DEFAULT_PLATFORM_MODEL);
+    assert.equal(requestedBody.stream, true);
+    assert.equal(requestedBody.tools?.[0]?.type, "web_search");
+    assert.equal(requestedBody.tools?.[0]?.search_context_size, "medium");
+    assert.equal(requestedBody.tools?.[0]?.external_web_access, undefined);
+    assert.equal(result.text, "ok");
+    assert.equal(result.citations[0]?.url, "https://example.test");
+  });
+
+  it("classifies HTTP 401 from the platform Responses API as an auth CodexError", async () => {
+    const fetchImpl = async () => new Response("nope", { status: 401 });
+    await assert.rejects(
+      runPlatformSearch({
+        query: "q",
+        model: DEFAULT_PLATFORM_MODEL,
+        token: "chatgpt-token",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
         return true;
       },
     );

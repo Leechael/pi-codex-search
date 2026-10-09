@@ -144,6 +144,15 @@ export async function runResponsesSearch(
     throw new Error("Codex responses response did not include a body");
   }
 
+  return consumeResponsesStream(response.body, model, onTextDelta);
+}
+
+/** Shared SSE consumer for Codex backend and api.openai.com/v1 Responses streams. */
+export async function consumeResponsesStream(
+  body: ReadableStream<Uint8Array>,
+  model: string,
+  onTextDelta?: (delta: string) => void,
+): Promise<CodexWebSearchResult> {
   let responseId: string | undefined;
   let usage: ResponseUsage | undefined;
   let streamedText = "";
@@ -151,7 +160,7 @@ export async function runResponsesSearch(
   const searchCalls = new Map<string, CodexSearchCall>();
   const citations = new Map<string, CodexCitation>();
 
-  for await (const event of parseSse(response.body)) {
+  for await (const event of parseSse(body)) {
     const data = event.data as ResponseEventData | undefined;
     if (!data) continue;
 

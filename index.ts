@@ -15,6 +15,8 @@ import {
   createTransport,
   fetchCodexModels,
   runResponsesSearch,
+  runPlatformSearch,
+  DEFAULT_PLATFORM_MODEL,
   runStandaloneCommands,
   selectDefaultModel,
   type CodexCitation,
@@ -306,7 +308,14 @@ function buildTool(config: ResolvedConfig) {
       const token = credential.token;
       const accountId = credential.accountId;
 
-      const model = await resolveSearchModel(ctx, token, accountId, config, signal);
+      const model = await resolveSearchModel(
+        ctx,
+        token,
+        accountId,
+        config,
+        credential.source,
+        signal,
+      );
       const freshness = params.freshness ?? config.defaultFreshness;
       let searchContextSize = params.search_context_size ?? config.defaultSearchContextSize;
       if (config.searchApi === "standalone") {
@@ -315,6 +324,13 @@ function buildTool(config: ResolvedConfig) {
         }
         if (searchContextSize === "low") searchContextSize = "medium";
         assertSupportedStandaloneCombination(searchContextSize, freshness);
+      }
+
+      if (credential.source === "openai" && config.searchApi === "standalone") {
+        throw new CodexError(
+          "auth",
+          "codex_standalone_web requires `/login openai-codex`. The Sign in with ChatGPT credential cannot call the Codex backend; use codex_search (platform web search) instead.",
+        );
       }
 
       const transport = createTransport({
@@ -512,6 +528,7 @@ function buildTool(config: ResolvedConfig) {
             partial: true,
             completed,
             total,
+            api: credential.source === "openai" ? "platform" : config.searchApi,
           }),
         });
       };
@@ -528,6 +545,16 @@ function buildTool(config: ResolvedConfig) {
                 }
               : undefined;
           try {
+            if (credential.source === "openai") {
+              return await runPlatformSearch({
+                query,
+                model,
+                token,
+                searchContextSize,
+                signal,
+                onTextDelta,
+              });
+            }
             return await runResponsesSearch({
               query,
               model,
@@ -592,6 +619,7 @@ function buildTool(config: ResolvedConfig) {
         content: [{ type: "text", text: formatToolText(successes, failures) }],
         details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
           elapsedMs: Date.now() - startedAt,
+          api: credential.source === "openai" ? "platform" : config.searchApi,
         }),
       };
     },
@@ -710,9 +738,14 @@ async function resolveSearchModel(
   token: string,
   accountId: string | undefined,
   config: ResolvedConfig,
+  source: CodexCredentialSource,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   if (config.model) return config.model;
+  if (source === "openai") {
+    if (ctx.model?.provider === "openai") return ctx.model.id;
+    return DEFAULT_PLATFORM_MODEL;
+  }
   if (ctx.model?.provider === OPENAI_CODEX_PROVIDER) return ctx.model.id;
 
   const models = await fetchCodexModels({
@@ -733,7 +766,7 @@ function missingCredentialMessage(preference: CodexCredentialPreference): string
   if (preference === "openai") {
     return 'The openai provider has no "Sign in with ChatGPT" credential. Run `/login openai` and choose "Sign in with ChatGPT", or switch the codex-search `credentialProvider` setting back to `auto`.';
   }
-  return 'OpenAI Codex subscription is not configured. Run `/login openai-codex` (listed as "OpenAI Codex (legacy)") and sign in with your ChatGPT Plus/Pro account.';
+  return 'No Codex or ChatGPT search credential is configured. Run `/login openai-codex` (listed as "OpenAI Codex (legacy)") for the Codex backend, or `/login openai` and choose "Sign in with ChatGPT" for platform web search.';
 }
 
 function withCredentialHint(
@@ -743,7 +776,7 @@ function withCredentialHint(
 ): string {
   if (source !== "openai") return summary;
   if (!failures.some((failure) => failure.kind === "auth")) return summary;
-  return `${summary}\n\nThe request used the openai provider's "Sign in with ChatGPT" token, which the Codex backend may not accept. If it keeps failing, run /login openai-codex (listed as "OpenAI Codex (legacy)") or set the codex-search credentialProvider setting to "openai-codex".`;
+  return `${summary}\n\nThe request used the openai provider's "Sign in with ChatGPT" token against api.openai.com/v1. If it keeps failing, run /login openai-codex (listed as "OpenAI Codex (legacy)") to use the Codex backend.`;
 }
 
 function buildDetails(
@@ -753,7 +786,13 @@ function buildDetails(
   searchContextSize: SearchContextSize,
   successes: QuerySuccess[],
   failures: QueryFailure[],
-  extra?: { partial?: boolean; completed?: number; total?: number; elapsedMs?: number },
+  extra?: {
+    partial?: boolean;
+    completed?: number;
+    total?: number;
+    elapsedMs?: number;
+    api?: string;
+  },
 ): WebSearchDetails {
   const queries = successes.map((s) => s.query).concat(failures.map((f) => f.query));
   return {
@@ -814,7 +853,7 @@ function countSuccessWebActions(details: WebSearchDetails): number {
 }
 
 function countSuccessOperations(details: WebSearchDetails): number {
-  if (details.api === "responses") return details.queryCount;
+  if (details.api === "responses" || details.api === "platform") return details.queryCount;
   const count = countSuccessWebActions(details);
   return count > 0 ? count : details.queryCount;
 }
@@ -828,7 +867,7 @@ function formatOperationNoun(details: WebSearchDetails, count: number): string {
 function formatResultSuffix(details: WebSearchDetails): string {
   const parts: string[] = [];
   const webActionCount = countSuccessWebActions(details);
-  if (details.api === "responses" && webActionCount > 0) {
+  if ((details.api === "responses" || details.api === "platform") && webActionCount > 0) {
     parts.push(`${webActionCount} web action${webActionCount === 1 ? "" : "s"}`);
   }
 

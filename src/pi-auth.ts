@@ -23,10 +23,10 @@ export type CodexCredentialSource = "openai-codex" | "openai";
 /**
  * How codex_search picks its credential.
  * - "openai-codex": only the OpenAI Codex (legacy) OAuth credential.
- * - "openai": only the "Sign in with ChatGPT" credential of the openai provider.
- *   Kept as an explicit diagnostic opt-in: the Codex backend rejects this token
- *   type (HTTP 401 rejected_by_access_enforcement), so "auto" never selects it.
- * - "auto" (default): only the legacy openai-codex credential.
+ * - "openai": the openai provider's "Sign in with ChatGPT" credential, used with
+ *   the platform Responses API (api.openai.com/v1), not the Codex backend.
+ * - "auto" (default): openai-codex first (Codex backend); if missing, openai
+ *   (platform web search).
  */
 export type CodexCredentialPreference = "auto" | CodexCredentialSource;
 
@@ -84,12 +84,12 @@ export function resolveCodexAccountId(
 /**
  * Resolve the credential codex_search should use against chatgpt.com/backend-api.
  *
- * The openai-codex OAuth credential is the only one the Codex backend accepts.
- * The openai provider's "Sign in with ChatGPT" credential (pi >= 0.99) only
- * qualifies under an explicit "openai" preference: it must be OAuth (an `sk-`
- * platform key is never sent to the ChatGPT backend), and the backend rejects
- * it with HTTP 401 rejected_by_access_enforcement, so "auto" does not fall
- * back to it.
+ * openai-codex talks to chatgpt.com/backend-api (the Codex backend).
+ * openai (Sign in with ChatGPT) talks to api.openai.com/v1 — the Codex backend
+ * rejects that token (HTTP 401 no_matching_rule), but hosted web_search on the
+ * platform API accepts it. "auto" prefers openai-codex and falls back to openai
+ * so a future Codex-backend sunset still has a working search path.
+ * An `sk-` platform key is never selected for the openai source.
  *
  * The resolved `accountId` may be undefined; callers decide whether it is required.
  */
@@ -98,11 +98,8 @@ export async function resolveCodexCredential(
   preference: CodexCredentialPreference = "auto",
   readStoredCredential: StoredCredentialReader | null = getPublicCredentialReader() ?? null,
 ): Promise<ResolvedCodexCredential | undefined> {
-  // "auto" resolves the legacy credential only. Falling back to the openai
-  // ChatGPT sign-in credential would guarantee a backend 401 — see the
-  // preference docs above — so it is opt-in via an explicit "openai" value.
   const candidates: CodexCredentialSource[] =
-    preference === "openai" ? [OPENAI_PROVIDER] : [OPENAI_CODEX_PROVIDER];
+    preference === "auto" ? [OPENAI_CODEX_PROVIDER, OPENAI_PROVIDER] : [preference];
 
   for (const provider of candidates) {
     const stored = readStored(registry, provider, readStoredCredential);

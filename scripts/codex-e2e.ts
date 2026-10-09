@@ -282,7 +282,7 @@ async function runPlatformProbe(options: CliOptions): Promise<E2eResult> {
       };
     }
     warnIfExpired(auth.expires, "openai");
-    const model = options.model ?? "gpt-5";
+    const model = options.model ?? "gpt-5.5";
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), options.timeoutMs);
@@ -1014,7 +1014,7 @@ Suite "platform" probes api.openai.com/v1/responses with the hosted web_search
 tool using the openai credential — the migration target if the Codex backend is
 ever sunset. It requires --credential openai and does not touch the Codex backend:
 
-  node scripts/codex-e2e.ts --credential openai --suite platform [--model gpt-5]
+  node scripts/codex-e2e.ts --credential openai --suite platform [--model gpt-5.5]
 `);
 }
 

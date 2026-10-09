@@ -113,7 +113,7 @@ const CYCLE_FIELDS: CycleField[] = [
     id: "credentialProvider",
     label: "Credential",
     description:
-      "Login that provides the Codex token (openai is diagnostic-only: the backend rejects it)",
+      "Login for search: auto uses Codex backend, then platform web search if only ChatGPT sign-in is available",
     values: () => [defaultTag("auto"), ...CREDENTIAL_SOURCES],
     get: (c) =>
       c.credentialProvider === undefined || c.credentialProvider === "auto"
@@ -465,6 +465,8 @@ async function loadModels(
 ): Promise<CodexModel[]> {
   const credential = await resolveCodexCredential(ctx.modelRegistry, resolved.credentialProvider);
   if (!credential) return [];
+  // Platform (ChatGPT sign-in) tokens are rejected by /codex/models.
+  if (credential.source === "openai") return [];
 
   const opts: Parameters<typeof fetchCodexModels>[0] = {
     token: credential.token,
